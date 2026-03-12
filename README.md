@@ -61,3 +61,25 @@ El resultado queda en `client/dist`.
 
 - `server/ladder-cache.json` y `server/api-stats.json` son archivos de runtime y no se versionan.
 - `server/.env` no se versiona por seguridad.
+
+## Deploy recomendado
+
+### Frontend en Vercel
+
+1. Importa el repo en Vercel.
+2. En el proyecto, usa `client` como Root Directory.
+3. Configuracion sugerida:
+	- Build Command: `npm run build`
+	- Output Directory: `dist`
+4. Define variable de entorno en Vercel:
+	- `VITE_API_URL=https://TU_BACKEND_PUBLICO`
+
+### Backend
+
+El backend actual en `server/` usa proceso Express persistente y archivos locales de cache (`ladder-cache.json`, `api-stats.json`).
+
+Por eso, lo mas estable es desplegarlo en Render/Railway/Fly.io (no serverless puro) y luego apuntar `VITE_API_URL` a ese dominio.
+
+### Importante sobre Vercel + backend actual
+
+Si intentas desplegar `server/index.js` tal cual en funciones serverless, el sistema de archivos es efimero y la app puede perder cache entre invocaciones.
