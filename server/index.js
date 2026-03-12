@@ -17,6 +17,9 @@ const RIOT_API_KEY = (process.env.RIOT_API_KEY || "").trim();
 const FRIENDS_FILE = path.join(__dirname, "friends.json");
 const CACHE_FILE = path.join(__dirname, "ladder-cache.json");
 const API_STATS_FILE = path.join(__dirname, "api-stats.json");
+const CLIENT_DIST_DIR = path.join(__dirname, "..", "client", "dist");
+const CLIENT_INDEX_FILE = path.join(CLIENT_DIST_DIR, "index.html");
+const HAS_CLIENT_BUILD = fs.existsSync(CLIENT_INDEX_FILE);
 const REGION = "europe";
 const PLATFORM = "euw1";
 const LADDER_CACHE_TTL_MS = Number(process.env.LADDER_CACHE_TTL_MS) || 60 * 1000;
@@ -1048,6 +1051,9 @@ function scheduleLadderRefresh() {
 }
 
 app.get("/", (req, res) => {
+  if (HAS_CLIENT_BUILD) {
+    return res.sendFile(CLIENT_INDEX_FILE);
+  }
   res.json({ ok: true, message: "SoloQ Ladder API running" });
 });
 
@@ -1251,6 +1257,16 @@ app.post("/api/force-refresh", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+if (HAS_CLIENT_BUILD) {
+  app.use(express.static(CLIENT_DIST_DIR));
+
+  // SPA fallback for non-API, non-asset GET routes.
+  app.get(/^(?!\/api\/|\/assets\/).*/, (req, res, next) => {
+    if (req.method !== "GET") return next();
+    return res.sendFile(CLIENT_INDEX_FILE);
+  });
+}
 
 app.use((req, res) => {
   res.status(404).json({ error: `Ruta no encontrada: ${req.method} ${req.originalUrl}` });

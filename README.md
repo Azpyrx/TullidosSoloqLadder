@@ -64,6 +64,27 @@ El resultado queda en `client/dist`.
 
 ## Deploy recomendado
 
+### Deploy entero en una sola plataforma (1 servicio)
+
+Si quieres subir frontend + backend juntos, puedes hacerlo en Render o Railway como un unico servicio web.
+
+Configuracion sugerida:
+
+1. Root del repo: `SOLOQLADDER/`
+2. Build Command:
+	- `npm --prefix client install && npm --prefix server install && npm --prefix client run build`
+3. Start Command:
+	- `npm --prefix server run start`
+4. Variables de entorno:
+	- `RIOT_API_KEY=...`
+	- `PORT` (opcional, la plataforma normalmente lo inyecta)
+
+Con esta configuracion:
+
+- El backend sirve la API en `/api/*`.
+- El backend tambien sirve el frontend compilado (`client/dist`).
+- El frontend usa el mismo dominio para consumir la API en produccion.
+
 ### Frontend en Vercel
 
 1. Importa el repo en Vercel.

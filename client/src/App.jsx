@@ -3,7 +3,7 @@ import "./index.css";
 import AppLayout from "./components/AppLayout.jsx";
 import Masonry from "react-masonry-css";
 
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3001";
+const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? "http://localhost:3001" : window.location.origin);
 const API = API_BASE;
 
 const TIER_COLORS = {
