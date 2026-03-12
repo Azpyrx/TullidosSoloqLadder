@@ -1,0 +1,69 @@
+.al-container {
+  position: relative;
+  width: 100%;
+}
+
+.al-list {
+  max-height: 600px;
+  overflow-y: auto;
+  padding: 4px 2px;
+}
+
+.al-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.al-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.al-list::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 4px;
+}
+
+.al-no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.al-no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.al-item {
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: linear-gradient(120deg, #fff, #faf5ea);
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+
+.al-item.al-selected {
+  background: linear-gradient(120deg, #f0f9f4, #e6f4ec);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(43, 106, 79, 0.12);
+}
+
+.al-top-gradient {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 48px;
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--card) 80%, white 20%), transparent);
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.al-bottom-gradient {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 80px;
+  background: linear-gradient(to top, color-mix(in srgb, var(--card) 80%, white 20%), transparent);
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
