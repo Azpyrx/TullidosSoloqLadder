@@ -74,7 +74,6 @@ TullidosSoloqLadder/
 │       ├── main.jsx             # Entry point
 │       ├── App.jsx              # Componente principal y lógica de la app
 │       └── components/
-│           ├── Squares.jsx      # Fondo animado
 │           ├── StaggeredMenu.jsx# Menú de pestañas
 │           ├── AnimatedList.jsx # Lista de ranking animada
 │           ├── AppLayout.jsx    # Wrapper de layout
