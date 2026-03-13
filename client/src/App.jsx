@@ -205,8 +205,13 @@ function buildPlayerWarnings(player) {
   else if (winRate <= 45) notes.push("Tilt mode");
 
   const explicitDuoMate = player.duoPartner || player.lastDuoWith || null;
+  const duoGamesRecent = Number(player.duoGamesTogetherRecent) || 0;
   if (explicitDuoMate) {
-    if (winRate >= 50) notes.push(`Hace duo con ${explicitDuoMate}`);
+    if (winRate >= 50) {
+      notes.push(duoGamesRecent >= 2
+        ? `Hace duo con ${explicitDuoMate} (${duoGamesRecent} partidas)`
+        : `Hace duo con ${explicitDuoMate}`);
+    }
     else notes.push("Hace duo y pierde");
   }
 
@@ -282,11 +287,18 @@ function buildActivityWarnings(player) {
 
   // Duo notes should only come from explicit duo data, never from alt-account grouping.
   const explicitDuoMate = player.duoPartner || player.lastDuoWith || null;
+  const duoGamesRecent = Number(player.duoGamesTogetherRecent) || 0;
   if (explicitDuoMate) {
     notes.push(pickSignalText([
-      `Suele jugar duo con ${explicitDuoMate}`,
-      `Ultimamente aparece en duo con ${explicitDuoMate}`,
-      `Se le ve bastante en premade con ${explicitDuoMate}`,
+      duoGamesRecent >= 2
+        ? `Suele jugar duo con ${explicitDuoMate} (${duoGamesRecent} juntas)`
+        : `Suele jugar duo con ${explicitDuoMate}`,
+      duoGamesRecent >= 2
+        ? `Ultimamente aparece en duo con ${explicitDuoMate} (${duoGamesRecent})`
+        : `Ultimamente aparece en duo con ${explicitDuoMate}`,
+      duoGamesRecent >= 2
+        ? `Se le ve bastante en premade con ${explicitDuoMate} (${duoGamesRecent})`
+        : `Se le ve bastante en premade con ${explicitDuoMate}`,
     ], `${playerId}-duo-${explicitDuoMate}`));
   }
 
@@ -921,7 +933,7 @@ export default function App() {
             <span className="rank-col-header__champs">TOP CHAMPS</span>
             <span className="rank-col-header__role">ROL</span>
             <span className="rank-col-header__elo">ELO</span>
-            <span className="rank-col-header__warns">SENALES</span>
+            <span className="rank-col-header__warns">SEÑALES</span>
           </div>
 
           {filteredPlayers.length === 0 ? (
@@ -997,7 +1009,7 @@ export default function App() {
                           <span key={warn} className="warn-pill" title={warn}>{warn}</span>
                         ))
                       ) : (
-                        <span className="warn-pill warn-pill--empty">Sin senales</span>
+                        <span className="warn-pill warn-pill--empty">Sin señales</span>
                       )}
                     </div>
                   </div>

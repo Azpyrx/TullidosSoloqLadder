@@ -26,6 +26,8 @@ const LADDER_CACHE_TTL_MS = Number(process.env.LADDER_CACHE_TTL_MS) || 60 * 1000
 const MATCH_SYNC_TTL_MS = Number(process.env.MATCH_SYNC_TTL_MS) || 30 * 60 * 1000;
 const RATE_LIMIT_FALLBACK_MS = Number(process.env.RATE_LIMIT_FALLBACK_MS) || 60 * 1000;
 const FRIENDS_PER_REFRESH = Math.max(1, Number(process.env.FRIENDS_PER_REFRESH) || 2);
+const MAX_RANKED_MATCH_CACHE_PER_PLAYER = Math.max(10, Number(process.env.MAX_RANKED_MATCH_CACHE_PER_PLAYER) || 20);
+const MAX_NEW_MATCH_DETAILS_PER_REFRESH = Math.max(1, Number(process.env.MAX_NEW_MATCH_DETAILS_PER_REFRESH) || 4);
 
 // Riot personal key hard limits: 20 req/1 s, 100 req/2 min.
 // We budget to 18/1 s and 90/2 min for a safety margin.
@@ -189,7 +191,7 @@ async function fetchRecentChampionsAndRole(puuid) {
     const isRecentSync = Number.isFinite(lastSyncMs) && (Date.now() - lastSyncMs) < MATCH_SYNC_TTL_MS;
 
     if (existingMatches.length > 0 && isRecentSync) {
-      let { topChampions, mainRole } = buildChampionRoleSummary(existingMatches.slice(0, 20));
+      let { topChampions, mainRole } = buildChampionRoleSummary(existingMatches.slice(0, MAX_RANKED_MATCH_CACHE_PER_PLAYER));
       if (topChampions.length === 0) {
         topChampions = await fetchTopMasteryChampions(puuid);
       }
@@ -197,11 +199,11 @@ async function fetchRecentChampionsAndRole(puuid) {
       return {
         topChampions,
         mainRole,
-        recentRankedMatchIds: existingMatches.slice(0, 20).map((m) => m.id),
+        recentRankedMatchIds: existingMatches.slice(0, MAX_RANKED_MATCH_CACHE_PER_PLAYER).map((m) => m.id),
       };
     }
 
-    const hasBootstrapData = existingMatches.length >= 20;
+    const hasBootstrapData = existingMatches.length >= MAX_RANKED_MATCH_CACHE_PER_PLAYER;
 
     const soloFetchCount = hasBootstrapData ? 4 : 5;
     const flexFetchCount = hasBootstrapData ? 4 : 5;
@@ -223,7 +225,7 @@ async function fetchRecentChampionsAndRole(puuid) {
     }
 
     const existingById = new Map(existingMatches.map((m) => [m.id, m]));
-    const idsToFetch = incomingIds.filter((id) => !existingById.has(id)).slice(0, 4);
+    const idsToFetch = incomingIds.filter((id) => !existingById.has(id)).slice(0, MAX_NEW_MATCH_DETAILS_PER_REFRESH);
 
     const fetchedMatches = [];
     for (const id of idsToFetch) {
@@ -258,7 +260,7 @@ async function fetchRecentChampionsAndRole(puuid) {
       if (!merged.some((m) => m.id === oldMatch.id)) merged.push(oldMatch);
     }
 
-    const finalMatches = merged.slice(0, 20);
+    const finalMatches = merged.slice(0, MAX_RANKED_MATCH_CACHE_PER_PLAYER);
     ladderCache.rankedMatchesByPuuid[puuid] = {
       matches: finalMatches,
       lastSyncAt: new Date().toISOString(),
@@ -286,8 +288,27 @@ async function fetchRecentChampionsAndRole(puuid) {
     return {
       topChampions,
       mainRole,
-      recentRankedMatchIds: fallback.slice(0, 20).map((m) => m.id),
+      recentRankedMatchIds: fallback.slice(0, MAX_RANKED_MATCH_CACHE_PER_PLAYER).map((m) => m.id),
     };
+  }
+}
+
+function pruneRankedMatchesCacheForActivePuuids(activePuuids = []) {
+  const activeSet = new Set((activePuuids || []).filter(Boolean));
+  for (const puuid of Object.keys(ladderCache.rankedMatchesByPuuid || {})) {
+    if (!activeSet.has(puuid)) {
+      delete ladderCache.rankedMatchesByPuuid[puuid];
+      continue;
+    }
+
+    const entry = ladderCache.rankedMatchesByPuuid[puuid];
+    const matches = Array.isArray(entry?.matches) ? entry.matches : [];
+    if (matches.length > MAX_RANKED_MATCH_CACHE_PER_PLAYER) {
+      ladderCache.rankedMatchesByPuuid[puuid] = {
+        ...entry,
+        matches: matches.slice(0, MAX_RANKED_MATCH_CACHE_PER_PLAYER),
+      };
+    }
   }
 }
 
@@ -733,7 +754,7 @@ async function fetchPlayerDataFromAccount(account, fallback = {}) {
 
   const soloq = entries.find((e) => e.queueType === "RANKED_SOLO_5x5") || null;
   const flex  = entries.find((e) => e.queueType === "RANKED_FLEX_SR")  || null;
-  const { topChampions, mainRole } = await fetchRecentChampionsAndRole(account.puuid);
+  const { topChampions, mainRole, recentRankedMatchIds } = await fetchRecentChampionsAndRole(account.puuid);
 
   // Always persist a fresh snapshot of raw data
   const raw = ladderCache.rawDataByPuuid[account.puuid] || (ladderCache.rawDataByPuuid[account.puuid] = {});
@@ -750,7 +771,69 @@ async function fetchPlayerDataFromAccount(account, fallback = {}) {
     flex,
     topChampions,
     mainRole,
+    recentRankedMatchIds,
   };
+}
+
+function annotateDuoPartners(players) {
+  const safePlayers = Array.isArray(players) ? players : [];
+  const keyed = safePlayers.filter((p) => p && !p.error && Array.isArray(p.recentRankedMatchIds));
+  const byPlayer = keyed.map((p) => {
+    const set = new Set((p.recentRankedMatchIds || []).filter(Boolean));
+    return { player: p, matchSet: set };
+  });
+
+  const duoInfoByPuuid = new Map();
+
+  for (let i = 0; i < byPlayer.length; i += 1) {
+    const a = byPlayer[i];
+    if (!a.player?.puuid || a.matchSet.size === 0) continue;
+
+    let bestPartner = null;
+    let bestCount = 0;
+
+    for (let j = 0; j < byPlayer.length; j += 1) {
+      if (i === j) continue;
+      const b = byPlayer[j];
+      if (!b.player?.puuid || b.matchSet.size === 0) continue;
+
+      let overlap = 0;
+      for (const id of a.matchSet) {
+        if (b.matchSet.has(id)) overlap += 1;
+      }
+
+      if (overlap > bestCount) {
+        bestCount = overlap;
+        bestPartner = b.player;
+      }
+    }
+
+    if (bestPartner && bestCount >= 2) {
+      duoInfoByPuuid.set(a.player.puuid, {
+        duoPartner: bestPartner.riotId,
+        duoGamesTogetherRecent: bestCount,
+      });
+    }
+  }
+
+  return safePlayers.map((p) => {
+    if (!p?.puuid) return p;
+    const duo = duoInfoByPuuid.get(p.puuid);
+    if (!duo) {
+      return {
+        ...p,
+        duoPartner: null,
+        duoGamesTogetherRecent: 0,
+      };
+    }
+
+    return {
+      ...p,
+      duoPartner: duo.duoPartner,
+      duoGamesTogetherRecent: duo.duoGamesTogetherRecent,
+      lastDuoWith: duo.duoPartner,
+    };
+  });
 }
 
 async function fetchPlayerData(gameName, tagLine) {
@@ -972,6 +1055,7 @@ async function buildLadderSnapshot(friends, previousPlayers = [], friendIndexesT
     .sort((a, b) => rankScore(b) - rankScore(a));
 
   const playersWithEmotes = applyFriendEmotesToPlayers(players, friends);
+  const playersWithDuoSignals = annotateDuoPartners(playersWithEmotes);
 
   // Persist current Riot ID + puuid mapping so name/tag changes are tracked automatically.
   const nextFriends = results.map((result, index) => {
@@ -988,7 +1072,7 @@ async function buildLadderSnapshot(friends, previousPlayers = [], friendIndexesT
     return next;
   });
 
-  return { players: playersWithEmotes, nextFriends };
+  return { players: playersWithDuoSignals, nextFriends };
 }
 
 async function refreshLadderCache(forceFull = false) {
@@ -1017,6 +1101,7 @@ async function refreshLadderCache(forceFull = false) {
 
     const { players, nextFriends } = await buildLadderSnapshot(friends, previousPlayers, friendIndexesToRefresh);
     ladderCache.players = players;
+    pruneRankedMatchesCacheForActivePuuids(players.map((p) => p?.puuid).filter(Boolean));
     updateDailyLpTracker(players);
     ladderCache.lastUpdatedAt = new Date().toISOString();
     ladderCache.lastError = null;
