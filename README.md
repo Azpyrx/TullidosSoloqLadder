@@ -72,9 +72,9 @@ Configuracion sugerida:
 
 1. Root del repo: `SOLOQLADDER/`
 2. Build Command:
-	- `npm --prefix client install && npm --prefix server install && npm --prefix client run build`
+	- `npm run build`
 3. Start Command:
-	- `npm --prefix server run start`
+	- `npm start`
 4. Variables de entorno:
 	- `RIOT_API_KEY=...`
 	- `PORT` (opcional, la plataforma normalmente lo inyecta)
@@ -84,6 +84,27 @@ Con esta configuracion:
 - El backend sirve la API en `/api/*`.
 - El backend tambien sirve el frontend compilado (`client/dist`).
 - El frontend usa el mismo dominio para consumir la API en produccion.
+
+### Railway (paso a paso rapido)
+
+1. New Project -> Deploy from GitHub Repo.
+2. Selecciona este repo.
+3. En Settings del servicio:
+	- Root Directory: vacio (root del repo)
+	- Build Command: `npm run build`
+	- Start Command: `npm start`
+4. En Variables:
+	- `RIOT_API_KEY` (obligatoria)
+5. Deploy y revisa logs.
+
+Errores comunes en Railway:
+
+- `npm ERR! missing script: start`:
+	- Asegurate de estar usando el root del repo y no `client/`.
+- Build ok pero pagina en blanco:
+	- Verifica que el build genero `client/dist` y que el deploy corrio `npm run build`.
+- `Falta RIOT_API_KEY en server/.env`:
+	- Agrega `RIOT_API_KEY` en Variables del servicio Railway.
 
 ### Frontend en Vercel
 
