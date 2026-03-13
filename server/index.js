@@ -354,6 +354,7 @@ const ladderCache = {
   // Raw per-puuid API data — persistent fallback for every step of the fetch pipeline.
   rawDataByPuuid: {},
   dailyLpByDate: {},
+  dailySoloqDeltaByDate: {},
   lpSnapshotByPlayer: {},
   activityFeedHistory: [],
   activityFeedSchemaVersion: ACTIVITY_FEED_SCHEMA_VERSION,
@@ -544,11 +545,27 @@ function updateDailyLpTracker(players) {
   while (days.length > 14) {
     const oldest = days.shift();
     delete ladderCache.dailyLpByDate[oldest];
+    delete ladderCache.dailySoloqDeltaByDate[oldest];
   }
 
   if (migratedLegacyRows) {
     ladderCache.activityFeedSchemaVersion = ACTIVITY_FEED_SCHEMA_VERSION;
   }
+}
+
+function updateDailySoloqDeltaCache(riotId, delta, dateKey = getDateKey()) {
+  const playerKey = String(riotId || "").trim().toLowerCase();
+  const safeDelta = Number(delta);
+  if (!playerKey || !Number.isFinite(safeDelta) || safeDelta === 0) return;
+
+  const byDate = ladderCache.dailySoloqDeltaByDate || (ladderCache.dailySoloqDeltaByDate = {});
+  const dayMap = byDate[dateKey] || (byDate[dateKey] = {});
+  const prev = Number(dayMap[playerKey]?.delta || 0);
+  dayMap[playerKey] = {
+    riotId,
+    delta: prev + safeDelta,
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 const QUEUE_TIER_ORDER = [
@@ -604,6 +621,12 @@ function buildDailyHighlights() {
   const dailyMap = ladderCache.dailyLpByDate[todayKey] || {};
   const entries = Object.entries(dailyMap);
   const activityDeltaByPlayer = new Map();
+  const persistedDailyDeltas = ladderCache.dailySoloqDeltaByDate?.[todayKey] || {};
+  for (const [playerKey, payload] of Object.entries(persistedDailyDeltas)) {
+    const safeDelta = Number(payload?.delta);
+    if (!Number.isFinite(safeDelta)) continue;
+    activityDeltaByPlayer.set(String(playerKey || "").toLowerCase(), safeDelta);
+  }
   for (const entry of ladderCache.activityFeedHistory || []) {
     const entryDate = getDateKey(new Date(Number(entry?.gameEndTimestamp || Date.parse(String(entry?.updatedAt || "")) || Date.now())));
     if (entryDate !== todayKey) continue;
@@ -833,6 +856,8 @@ function refreshActivityFeedHistory(players = []) {
       text: `${playerName} ${action} ${lpAbs}lp con ${championName} quedando ${kda}`,
       updatedAt: row?.lastSeenAt || new Date().toISOString(),
     });
+
+    updateDailySoloqDeltaCache(row?.riotId || player?.riotId || playerName, stepDelta, todayKey);
   }
 
   if (incoming.length > 0) {
@@ -910,6 +935,7 @@ function saveCacheToFile() {
         playerSnapshotByKey: ladderCache.playerSnapshotByKey,
         rawDataByPuuid: ladderCache.rawDataByPuuid,
         dailyLpByDate: ladderCache.dailyLpByDate,
+        dailySoloqDeltaByDate: ladderCache.dailySoloqDeltaByDate,
         lpSnapshotByPlayer: ladderCache.lpSnapshotByPlayer,
         activityFeedHistory: ladderCache.activityFeedHistory,
         activityFeedSchemaVersion: ladderCache.activityFeedSchemaVersion,
@@ -932,6 +958,7 @@ function loadCacheFromFile() {
       ladderCache.playerSnapshotByKey = cached.playerSnapshotByKey || {};
       ladderCache.rawDataByPuuid = cached.rawDataByPuuid || {};
       ladderCache.dailyLpByDate = cached.dailyLpByDate || {};
+      ladderCache.dailySoloqDeltaByDate = cached.dailySoloqDeltaByDate || {};
       ladderCache.lpSnapshotByPlayer = cached.lpSnapshotByPlayer || {};
       ladderCache.activityFeedSchemaVersion = Number(cached.activityFeedSchemaVersion || 1);
       ladderCache.activityFeedHistory = Array.isArray(cached.activityFeedHistory)
@@ -941,10 +968,13 @@ function loadCacheFromFile() {
       // Keep only the last 14 days in-memory and on-disk.
       const validDays = Object.keys(ladderCache.dailyLpByDate || {}).sort().slice(-14);
       const compactDaily = {};
+      const compactDailySoloqDelta = {};
       for (const day of validDays) {
         compactDaily[day] = ladderCache.dailyLpByDate[day];
+        compactDailySoloqDelta[day] = ladderCache.dailySoloqDeltaByDate?.[day] || {};
       }
       ladderCache.dailyLpByDate = compactDaily;
+      ladderCache.dailySoloqDeltaByDate = compactDailySoloqDelta;
       if (ladderCache.activityFeedSchemaVersion < ACTIVITY_FEED_SCHEMA_VERSION) {
         ladderCache.activityFeedHistory = patchLegacyActivityFeedHistory(ladderCache.activityFeedHistory);
         if (ladderCache.activityFeedHistory.length === 0) {
@@ -953,6 +983,14 @@ function loadCacheFromFile() {
         ladderCache.activityFeedSchemaVersion = ACTIVITY_FEED_SCHEMA_VERSION;
       } else if (ladderCache.activityFeedHistory.length === 0) {
         ladderCache.activityFeedHistory = buildActivityHistoryBootstrap(ladderCache.players);
+      }
+
+      // Rehydrate persistent daily delta cache from existing activity history if needed.
+      for (const entry of ladderCache.activityFeedHistory || []) {
+        const delta = Number(entry?.lpDelta);
+        if (!Number.isFinite(delta) || delta === 0) continue;
+        const day = getDateKey(new Date(Number(entry?.gameEndTimestamp || Date.parse(String(entry?.updatedAt || "")) || Date.now())));
+        updateDailySoloqDeltaCache(entry?.player, delta, day);
       }
 
       ladderCache.refreshCursor = Number(cached.refreshCursor) || 0;
