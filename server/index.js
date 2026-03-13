@@ -22,12 +22,18 @@ const CLIENT_INDEX_FILE = path.join(CLIENT_DIST_DIR, "index.html");
 const HAS_CLIENT_BUILD = fs.existsSync(CLIENT_INDEX_FILE);
 const REGION = "europe";
 const PLATFORM = "euw1";
-const LADDER_CACHE_TTL_MS = Number(process.env.LADDER_CACHE_TTL_MS) || 60 * 1000;
-const MATCH_SYNC_TTL_MS = Number(process.env.MATCH_SYNC_TTL_MS) || 30 * 60 * 1000;
+const LADDER_CACHE_TTL_MS = Number(process.env.LADDER_CACHE_TTL_MS) || 2 * 60 * 1000;
+const MATCH_SYNC_TTL_MS = Number(process.env.MATCH_SYNC_TTL_MS) || 2 * 60 * 1000;
 const RATE_LIMIT_FALLBACK_MS = Number(process.env.RATE_LIMIT_FALLBACK_MS) || 60 * 1000;
 const FRIENDS_PER_REFRESH = Math.max(1, Number(process.env.FRIENDS_PER_REFRESH) || 2);
 const MAX_RANKED_MATCH_CACHE_PER_PLAYER = Math.max(10, Number(process.env.MAX_RANKED_MATCH_CACHE_PER_PLAYER) || 20);
-const MAX_NEW_MATCH_DETAILS_PER_REFRESH = Math.max(1, Number(process.env.MAX_NEW_MATCH_DETAILS_PER_REFRESH) || 4);
+const MAX_NEW_MATCH_DETAILS_PER_REFRESH = Math.max(1, Number(process.env.MAX_NEW_MATCH_DETAILS_PER_REFRESH) || 1);
+const DUO_SOLOQ_RECENT_GAMES = 10;
+const FULL_REFRESH_EVERY_CYCLE = String(process.env.FULL_REFRESH_EVERY_CYCLE || "true").toLowerCase() !== "false";
+const ACCOUNT_REFRESH_TTL_MS = Number(process.env.ACCOUNT_REFRESH_TTL_MS) || 24 * 60 * 60 * 1000;
+const SUMMONER_REFRESH_TTL_MS = Number(process.env.SUMMONER_REFRESH_TTL_MS) || 6 * 60 * 60 * 1000;
+const LP_STEP_ANOMALY_WINDOW_MS = Number(process.env.LP_STEP_ANOMALY_WINDOW_MS) || 30 * 60 * 1000;
+const LP_STEP_ANOMALY_THRESHOLD = Number(process.env.LP_STEP_ANOMALY_THRESHOLD) || 55;
 
 // Riot personal key hard limits: 20 req/1 s, 100 req/2 min.
 // We budget to 18/1 s and 90/2 min for a safety margin.
@@ -46,6 +52,18 @@ function getDateKey(date = new Date()) {
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
+}
+
+function isAnomalousLpStep(stepDelta, lastSeenIso, nowIso) {
+  const absStep = Math.abs(Number(stepDelta) || 0);
+  if (absStep <= LP_STEP_ANOMALY_THRESHOLD) return false;
+
+  const lastSeenTs = Date.parse(String(lastSeenIso || ""));
+  const nowTs = Date.parse(String(nowIso || ""));
+  if (!Number.isFinite(lastSeenTs) || !Number.isFinite(nowTs)) return true;
+
+  // Large LP jumps in a short time are usually stale-seed artifacts.
+  return (nowTs - lastSeenTs) <= LP_STEP_ANOMALY_WINDOW_MS;
 }
 
 function loadApiStatsFromFile() {
@@ -200,23 +218,23 @@ async function fetchRecentChampionsAndRole(puuid) {
         topChampions,
         mainRole,
         recentRankedMatchIds: existingMatches.slice(0, MAX_RANKED_MATCH_CACHE_PER_PLAYER).map((m) => m.id),
+        recentSoloqMatchIds: existingMatches
+          .filter((m) => m?.queueId === 420)
+          .sort((a, b) => Number(b?.gameEndTimestamp || 0) - Number(a?.gameEndTimestamp || 0))
+          .slice(0, DUO_SOLOQ_RECENT_GAMES)
+          .map((m) => m.id),
       };
     }
 
     const hasBootstrapData = existingMatches.length >= MAX_RANKED_MATCH_CACHE_PER_PLAYER;
 
     const soloFetchCount = hasBootstrapData ? 4 : 5;
-    const flexFetchCount = hasBootstrapData ? 4 : 5;
 
     const soloMatchIds = await riotFetch(
       `https://${REGION}.api.riotgames.com/lol/match/v5/matches/by-puuid/${puuid}/ids?queue=420&count=${soloFetchCount}`
     ).catch(() => []);
 
-    const flexMatchIds = await riotFetch(
-      `https://${REGION}.api.riotgames.com/lol/match/v5/matches/by-puuid/${puuid}/ids?queue=440&count=${flexFetchCount}`
-    ).catch(() => []);
-
-    let incomingIds = Array.from(new Set([...(soloMatchIds || []), ...(flexMatchIds || [])]));
+    let incomingIds = Array.from(new Set([...(soloMatchIds || [])]));
 
     if (incomingIds.length === 0 && !hasBootstrapData) {
       incomingIds = await riotFetch(
@@ -276,6 +294,11 @@ async function fetchRecentChampionsAndRole(puuid) {
       topChampions,
       mainRole,
       recentRankedMatchIds: finalMatches.map((m) => m.id),
+      recentSoloqMatchIds: finalMatches
+        .filter((m) => m?.queueId === 420)
+        .sort((a, b) => Number(b?.gameEndTimestamp || 0) - Number(a?.gameEndTimestamp || 0))
+        .slice(0, DUO_SOLOQ_RECENT_GAMES)
+        .map((m) => m.id),
     };
   } catch (err) {
     console.warn(`fetchRecentChampionsAndRole failed:`, err.message);
@@ -289,6 +312,11 @@ async function fetchRecentChampionsAndRole(puuid) {
       topChampions,
       mainRole,
       recentRankedMatchIds: fallback.slice(0, MAX_RANKED_MATCH_CACHE_PER_PLAYER).map((m) => m.id),
+      recentSoloqMatchIds: fallback
+        .filter((m) => m?.queueId === 420)
+        .sort((a, b) => Number(b?.gameEndTimestamp || 0) - Number(a?.gameEndTimestamp || 0))
+        .slice(0, DUO_SOLOQ_RECENT_GAMES)
+        .map((m) => m.id),
     };
   }
 }
@@ -352,6 +380,8 @@ function updateDailyLpTracker(players) {
       soloqStartLp: Number.isFinite(soloLp) ? soloLp : null,
       soloqCurrentLp: Number.isFinite(soloLp) ? soloLp : null,
       soloqDeltaLp: 0,
+      soloqLastDeltaLp: 0,
+      soloqBestSingleGainLp: 0,
       flexStartLp: Number.isFinite(flexLp) ? flexLp : null,
       flexCurrentLp: Number.isFinite(flexLp) ? flexLp : null,
       flexDeltaLp: 0,
@@ -372,10 +402,27 @@ function updateDailyLpTracker(players) {
     if (Number.isFinite(soloLp)) {
       if (entry.soloqStartLp === null) entry.soloqStartLp = soloLp;
       const prevSolo = Number(playerSnapshot.soloqLp);
+      let stepSoloDelta = 0;
       if (Number.isFinite(prevSolo) && playerSnapshot.lastDateKey === todayKey) {
-        entry.soloqDeltaLp = Number(entry.soloqDeltaLp || 0) + (soloLp - prevSolo);
+        const rawStepSoloDelta = soloLp - prevSolo;
+        if (isAnomalousLpStep(rawStepSoloDelta, playerSnapshot.lastSeenAt, nowIso)) {
+          // Rebase when the delta is implausibly large for the elapsed time.
+          entry.soloqStartLp = soloLp;
+          entry.soloqCurrentLp = soloLp;
+          entry.soloqLastDeltaLp = 0;
+          entry.soloqBestSingleGainLp = 0;
+        } else {
+          stepSoloDelta = rawStepSoloDelta;
+        }
+      }
+      entry.soloqLastDeltaLp = stepSoloDelta;
+      if (stepSoloDelta > Number(entry.soloqBestSingleGainLp || 0)) {
+        entry.soloqBestSingleGainLp = stepSoloDelta;
       }
       entry.soloqCurrentLp = soloLp;
+      entry.soloqDeltaLp = Number.isFinite(entry.soloqStartLp)
+        ? (soloLp - entry.soloqStartLp)
+        : 0;
       playerSnapshot.soloqLp = soloLp;
     }
 
@@ -383,9 +430,16 @@ function updateDailyLpTracker(players) {
       if (entry.flexStartLp === null) entry.flexStartLp = flexLp;
       const prevFlex = Number(playerSnapshot.flexLp);
       if (Number.isFinite(prevFlex) && playerSnapshot.lastDateKey === todayKey) {
-        entry.flexDeltaLp = Number(entry.flexDeltaLp || 0) + (flexLp - prevFlex);
+        const rawStepFlexDelta = flexLp - prevFlex;
+        if (isAnomalousLpStep(rawStepFlexDelta, playerSnapshot.lastSeenAt, nowIso)) {
+          entry.flexStartLp = flexLp;
+          entry.flexCurrentLp = flexLp;
+        }
       }
       entry.flexCurrentLp = flexLp;
+      entry.flexDeltaLp = Number.isFinite(entry.flexStartLp)
+        ? (flexLp - entry.flexStartLp)
+        : 0;
       playerSnapshot.flexLp = flexLp;
     }
 
@@ -420,102 +474,33 @@ function buildDailyHighlights() {
     let totalDelta = 0;
 
     if (Number.isFinite(row.soloqStartLp) && Number.isFinite(row.soloqCurrentLp)) {
-      const delta = Number.isFinite(Number(row.soloqDeltaLp))
-        ? Number(row.soloqDeltaLp)
-        : (row.soloqCurrentLp - row.soloqStartLp);
+      const netDelta = row.soloqCurrentLp - row.soloqStartLp;
       hasAnyQueue = true;
-      totalDelta += delta;
-      if (!bestSoloqGain || delta > bestSoloqGain.deltaLp) {
-        bestSoloqGain = { player: row.riotId, deltaLp: delta, currentLp: row.soloqCurrentLp };
+      totalDelta += netDelta;
+      if (netDelta > 0 && (!bestSoloqGain || netDelta > bestSoloqGain.deltaLp)) {
+        bestSoloqGain = { player: row.riotId, deltaLp: netDelta, currentLp: row.soloqCurrentLp };
       }
-      if (!worstSoloqLoss || delta < worstSoloqLoss.deltaLp) {
-        worstSoloqLoss = { player: row.riotId, deltaLp: delta, currentLp: row.soloqCurrentLp };
+      if (netDelta < 0 && (!worstSoloqLoss || netDelta < worstSoloqLoss.deltaLp)) {
+        worstSoloqLoss = { player: row.riotId, deltaLp: netDelta, currentLp: row.soloqCurrentLp };
       }
     }
 
     if (Number.isFinite(row.flexStartLp) && Number.isFinite(row.flexCurrentLp)) {
-      const delta = Number.isFinite(Number(row.flexDeltaLp))
-        ? Number(row.flexDeltaLp)
-        : (row.flexCurrentLp - row.flexStartLp);
+      const delta = row.flexCurrentLp - row.flexStartLp;
       hasAnyQueue = true;
       totalDelta += delta;
-      if (!bestFlexGain || delta > bestFlexGain.deltaLp) {
+      if (delta > 0 && (!bestFlexGain || delta > bestFlexGain.deltaLp)) {
         bestFlexGain = { player: row.riotId, deltaLp: delta, currentLp: row.flexCurrentLp };
       }
     }
 
     if (hasAnyQueue) {
-      if (!bestOverallGain || totalDelta > bestOverallGain.deltaLp) {
+      if (totalDelta > 0 && (!bestOverallGain || totalDelta > bestOverallGain.deltaLp)) {
         bestOverallGain = { player: row.riotId, deltaLp: totalDelta };
       }
-      if (!worstOverallLoss || totalDelta < worstOverallLoss.deltaLp) {
+      if (totalDelta < 0 && (!worstOverallLoss || totalDelta < worstOverallLoss.deltaLp)) {
         worstOverallLoss = { player: row.riotId, deltaLp: totalDelta };
       }
-    }
-  }
-
-  // Fallback: if daily tracker is empty (or has only unranked rows),
-  // derive a neutral snapshot from current cached players so UI cards
-  // never render as fully empty.
-  if (!bestSoloqGain || !worstSoloqLoss || !bestFlexGain) {
-    const rankedSolo = (ladderCache.players || [])
-      .filter((p) => p && !p.error && p.soloq)
-      .sort((a, b) => rankScore(b) - rankScore(a));
-
-    const rankedFlex = (ladderCache.players || [])
-      .filter((p) => p && !p.error && p.flex)
-      .sort((a, b) => {
-        const aTier = TIER_ORDER.indexOf(a.flex.tier);
-        const bTier = TIER_ORDER.indexOf(b.flex.tier);
-        const aRank = RANK_ORDER.indexOf(a.flex.rank);
-        const bRank = RANK_ORDER.indexOf(b.flex.rank);
-        const aLp = Number(a.flex.leaguePoints) || 0;
-        const bLp = Number(b.flex.leaguePoints) || 0;
-        return ((TIER_ORDER.length - bTier) * 10000 + (RANK_ORDER.length - bRank) * 100 + bLp)
-          - ((TIER_ORDER.length - aTier) * 10000 + (RANK_ORDER.length - aRank) * 100 + aLp);
-      });
-
-    if (!bestSoloqGain && rankedSolo.length > 0) {
-      const p = rankedSolo[0];
-      bestSoloqGain = {
-        player: p.riotId,
-        deltaLp: 0,
-        currentLp: Number(p?.soloq?.leaguePoints) || 0,
-      };
-    }
-
-    if (!worstSoloqLoss && rankedSolo.length > 0) {
-      const p = rankedSolo[rankedSolo.length - 1];
-      worstSoloqLoss = {
-        player: p.riotId,
-        deltaLp: 0,
-        currentLp: Number(p?.soloq?.leaguePoints) || 0,
-      };
-    }
-
-    if (!bestFlexGain && rankedFlex.length > 0) {
-      const p = rankedFlex[0];
-      bestFlexGain = {
-        player: p.riotId,
-        deltaLp: 0,
-        currentLp: Number(p?.flex?.leaguePoints) || 0,
-      };
-    }
-
-    if (!bestOverallGain && rankedSolo.length > 0) {
-      const p = rankedSolo[0];
-      bestOverallGain = {
-        player: p.riotId,
-        deltaLp: 0,
-      };
-    }
-
-    if (!worstOverallLoss && rankedSolo.length > 0) {
-      const p = rankedSolo[rankedSolo.length - 1];
-      worstOverallLoss = {
-        player: p.riotId,
-        deltaLp: 0,
-      };
     }
   }
 
@@ -557,8 +542,6 @@ function saveCacheToFile() {
         rankedMatchesByPuuid: ladderCache.rankedMatchesByPuuid,
         playerSnapshotByKey: ladderCache.playerSnapshotByKey,
         rawDataByPuuid: ladderCache.rawDataByPuuid,
-        dailyLpByDate: ladderCache.dailyLpByDate,
-        lpSnapshotByPlayer: ladderCache.lpSnapshotByPlayer,
         refreshCursor: ladderCache.refreshCursor,
         lastUpdatedAt: ladderCache.lastUpdatedAt,
         lastError: ladderCache.lastError,
@@ -577,8 +560,10 @@ function loadCacheFromFile() {
       ladderCache.rankedMatchesByPuuid = cached.rankedMatchesByPuuid || {};
       ladderCache.playerSnapshotByKey = cached.playerSnapshotByKey || {};
       ladderCache.rawDataByPuuid = cached.rawDataByPuuid || {};
-      ladderCache.dailyLpByDate = cached.dailyLpByDate || {};
-      ladderCache.lpSnapshotByPlayer = cached.lpSnapshotByPlayer || {};
+      // Activity should be live-session based to avoid stale or corrupted daily deltas
+      // from previous process runs.
+      ladderCache.dailyLpByDate = {};
+      ladderCache.lpSnapshotByPlayer = {};
       ladderCache.refreshCursor = Number(cached.refreshCursor) || 0;
       ladderCache.lastUpdatedAt = cached.lastUpdatedAt || null;
       ladderCache.lastError = cached.lastError || null;
@@ -685,11 +670,24 @@ function getSnapshotFallback(friend) {
   return ladderCache.playerSnapshotByKey[key] || null;
 }
 
+function isCacheFresh(lastIso, ttlMs) {
+  if (!lastIso || !Number.isFinite(ttlMs) || ttlMs <= 0) return false;
+  const lastMs = Date.parse(lastIso);
+  if (!Number.isFinite(lastMs)) return false;
+  return (Date.now() - lastMs) < ttlMs;
+}
+
 // ── Per-step cached fetch helpers ───────────────────────────────────────────
 // Each helper tries the live API first, persists the result, and falls back to
 // the cached copy so a mid-flight 429 never loses previously good data.
 
 async function fetchSummonerWithCache(puuid) {
+  const cachedRaw = ladderCache.rawDataByPuuid[puuid];
+  const cachedSummoner = cachedRaw?.summoner;
+  if (cachedSummoner && isCacheFresh(cachedRaw?.lastSummonerAt, SUMMONER_REFRESH_TTL_MS)) {
+    return cachedSummoner;
+  }
+
   try {
     const summoner = await riotFetch(
       `https://${PLATFORM}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/${encodeURIComponent(puuid)}`
@@ -728,6 +726,12 @@ async function fetchLeagueEntriesWithCache(puuid) {
 }
 
 async function fetchAccountByPuuidWithCache(puuid) {
+  const cachedRaw = ladderCache.rawDataByPuuid[puuid];
+  const cachedAccount = cachedRaw?.account;
+  if (cachedAccount && isCacheFresh(cachedRaw?.lastAccountAt, ACCOUNT_REFRESH_TTL_MS)) {
+    return cachedAccount;
+  }
+
   try {
     const account = await riotFetch(
       `https://${REGION}.api.riotgames.com/riot/account/v1/accounts/by-puuid/${encodeURIComponent(puuid)}`
@@ -754,7 +758,7 @@ async function fetchPlayerDataFromAccount(account, fallback = {}) {
 
   const soloq = entries.find((e) => e.queueType === "RANKED_SOLO_5x5") || null;
   const flex  = entries.find((e) => e.queueType === "RANKED_FLEX_SR")  || null;
-  const { topChampions, mainRole, recentRankedMatchIds } = await fetchRecentChampionsAndRole(account.puuid);
+  const { topChampions, mainRole, recentRankedMatchIds, recentSoloqMatchIds } = await fetchRecentChampionsAndRole(account.puuid);
 
   // Always persist a fresh snapshot of raw data
   const raw = ladderCache.rawDataByPuuid[account.puuid] || (ladderCache.rawDataByPuuid[account.puuid] = {});
@@ -772,14 +776,15 @@ async function fetchPlayerDataFromAccount(account, fallback = {}) {
     topChampions,
     mainRole,
     recentRankedMatchIds,
+    recentSoloqMatchIds,
   };
 }
 
 function annotateDuoPartners(players) {
   const safePlayers = Array.isArray(players) ? players : [];
-  const keyed = safePlayers.filter((p) => p && !p.error && Array.isArray(p.recentRankedMatchIds));
+  const keyed = safePlayers.filter((p) => p && !p.error && Array.isArray(p.recentSoloqMatchIds));
   const byPlayer = keyed.map((p) => {
-    const set = new Set((p.recentRankedMatchIds || []).filter(Boolean));
+    const set = new Set((p.recentSoloqMatchIds || []).filter(Boolean));
     return { player: p, matchSet: set };
   });
 
@@ -1083,9 +1088,10 @@ async function refreshLadderCache(forceFull = false) {
   ladderCache.refreshPromise = (async () => {
     const friends = readFriends();
     const previousPlayers = Array.isArray(ladderCache.players) ? ladderCache.players : [];
+    const shouldRunFullRefresh = forceFull || FULL_REFRESH_EVERY_CYCLE;
 
     let friendIndexesToRefresh = null;
-    if (!forceFull) {
+    if (!shouldRunFullRefresh) {
       friendIndexesToRefresh = new Set();
       if (friends.length > 0) {
         const batchSize = Math.min(FRIENDS_PER_REFRESH, friends.length);
@@ -1128,7 +1134,7 @@ function scheduleLadderRefresh() {
   setInterval(async () => {
     try {
       if (!RIOT_API_KEY) return;
-      await refreshLadderCache();
+      await refreshLadderCache(true);
     } catch (error) {
       console.error("ERROR refreshing ladder cache:", error.message);
     }
@@ -1290,14 +1296,7 @@ app.delete("/api/friends/:gameName/:tagLine", async (req, res) => {
 
 // GET /api/status — expone estado del rate limit y cache para debug
 app.get("/api/status", (req, res) => {
-  const todayKey = getDateKey();
-  const hasTodayDailyMap = Boolean(ladderCache.dailyLpByDate[todayKey])
-    && Object.keys(ladderCache.dailyLpByDate[todayKey]).length > 0;
-
-  if (!hasTodayDailyMap && Array.isArray(ladderCache.players) && ladderCache.players.length > 0) {
-    updateDailyLpTracker(ladderCache.players);
-    saveCacheToFile();
-  }
+  // Daily activity is computed from live refreshes only.
 
   const now = Date.now();
   const rateLimitSecondsLeft = riotRateLimitedUntil > now
@@ -1369,10 +1368,6 @@ loadApiStatsFromFile();
 const cacheLoadedFromDisk = loadCacheFromFile();
 if (!cacheLoadedFromDisk) {
   console.log("No cache file found. Ladder will be empty until first refresh.");
-} else if (Array.isArray(ladderCache.players) && ladderCache.players.length > 0) {
-  // Seed today's LP baseline from cached snapshot so daily highlights are available immediately.
-  updateDailyLpTracker(ladderCache.players);
-  saveCacheToFile();
 }
 
 // Schedule periodic refresh; skip forced full refresh on startup when cache exists.

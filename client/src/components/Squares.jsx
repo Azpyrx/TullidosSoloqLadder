@@ -3,10 +3,10 @@ import './Squares.css';
 
 const Squares = ({
   direction = 'diagonal',
-  speed = 0.7,
-  borderColor = 'rgba(138, 43, 226, 0.4)',
-  squareSize = 80,
-  hoverFillColor = 'rgba(138, 43, 226, 0.2)',
+  speed = 0.8,
+  borderColor = 'rgba(218, 209, 226, 0.4)',
+  squareSize = 40,
+  hoverFillColor = 'rgba(0, 38, 255, 0.2)',
   className = ''
 }) => {
   const canvasRef = useRef(null);
@@ -161,8 +161,8 @@ const Squares = ({
     };
 
     if (!isCoarsePointer) {
-      canvas.addEventListener('mousemove', handleMouseMove);
-      canvas.addEventListener('mouseleave', handleMouseLeave);
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseleave', handleMouseLeave);
     }
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -180,8 +180,8 @@ const Squares = ({
       if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
       if (!isCoarsePointer) {
-        canvas.removeEventListener('mousemove', handleMouseMove);
-        canvas.removeEventListener('mouseleave', handleMouseLeave);
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseleave', handleMouseLeave);
       }
     };
   }, [direction, speed, borderColor, hoverFillColor, squareSize]);

@@ -156,6 +156,23 @@ function getSoloqScore(player) {
   return tierValue + divisionValue * 100 + (player.soloq.leaguePoints || 0);
 }
 
+function buildOpggUrlFromRiotId(riotId) {
+  const raw = String(riotId || "").trim();
+  if (!raw || !raw.includes("#")) return null;
+  const [gameNameRaw, tagLineRaw] = raw.split("#");
+  const gameName = String(gameNameRaw || "").trim();
+  const tagLine = String(tagLineRaw || "").trim();
+  if (!gameName || !tagLine) return null;
+
+  const slug = `${encodeURIComponent(gameName)}-${encodeURIComponent(tagLine)}`;
+  return `https://www.op.gg/summoners/euw/${slug}`;
+}
+
+function hasPromosInTier(tier) {
+  const safeTier = String(tier || "").toUpperCase();
+  return !["MASTER", "GRANDMASTER", "CHALLENGER"].includes(safeTier);
+}
+
 function getMainRoleFromAccounts(accounts) {
   const roleCount = new Map();
   for (const account of accounts) {
@@ -209,7 +226,7 @@ function buildPlayerWarnings(player) {
   if (explicitDuoMate) {
     if (winRate >= 50) {
       notes.push(duoGamesRecent >= 2
-        ? `Hace duo con ${explicitDuoMate} (${duoGamesRecent} partidas)`
+        ? `Hace duo con ${explicitDuoMate} (${duoGamesRecent} soloq)`
         : `Hace duo con ${explicitDuoMate}`);
     }
     else notes.push("Hace duo y pierde");
@@ -225,7 +242,9 @@ function buildPlayerWarnings(player) {
     }
   }
 
-  if ((player.soloq.leaguePoints || 0) >= 70) notes.push("A 2 wins de promo");
+  if (hasPromosInTier(player.soloq.tier) && (player.soloq.leaguePoints || 0) >= 70) {
+    notes.push("A 2 wins de promo");
+  }
 
   return notes
     .map((n) => String(n || "").replace(/\s+/g, " ").trim())
@@ -291,13 +310,13 @@ function buildActivityWarnings(player) {
   if (explicitDuoMate) {
     notes.push(pickSignalText([
       duoGamesRecent >= 2
-        ? `Suele jugar duo con ${explicitDuoMate} (${duoGamesRecent} juntas)`
+        ? `Suele jugar duo con ${explicitDuoMate} (${duoGamesRecent} soloq)`
         : `Suele jugar duo con ${explicitDuoMate}`,
       duoGamesRecent >= 2
-        ? `Ultimamente aparece en duo con ${explicitDuoMate} (${duoGamesRecent})`
+        ? `Ultimamente aparece en duo con ${explicitDuoMate} (${duoGamesRecent} soloq)`
         : `Ultimamente aparece en duo con ${explicitDuoMate}`,
       duoGamesRecent >= 2
-        ? `Se le ve bastante en premade con ${explicitDuoMate} (${duoGamesRecent})`
+        ? `Se le ve bastante en premade con ${explicitDuoMate} (${duoGamesRecent} soloq)`
         : `Se le ve bastante en premade con ${explicitDuoMate}`,
     ], `${playerId}-duo-${explicitDuoMate}`));
   }
@@ -311,7 +330,7 @@ function buildActivityWarnings(player) {
   }
 
   const currentLp = Number(player.soloq.leaguePoints) || 0;
-  if (currentLp >= 75) {
+  if (hasPromosInTier(player.soloq.tier) && currentLp >= 75) {
     notes.push(pickSignalText([
       `Esta a nada de subir: ${currentLp} LP`,
       `Muy cerca del ascenso con ${currentLp} LP`,
@@ -537,7 +556,7 @@ export default function App() {
     if (activeTab !== "ranking") return;
     const timer = setInterval(() => {
       loadLadder(true);
-    }, 90 * 1000);
+    }, 120 * 1000);
     return () => clearInterval(timer);
   }, [activeTab, loadLadder]);
 
@@ -591,16 +610,6 @@ export default function App() {
       const sortedByScore = [...accounts].sort((a, b) => getSoloqScore(b) - getSoloqScore(a));
       const bestSoloqAccount = sortedByScore[0] || null;
       const primaryRiotId = bestSoloqAccount?.riotId || null;
-      const wins = accounts.reduce((sum, p) => sum + (p.soloq?.wins || 0), 0);
-      const losses = accounts.reduce((sum, p) => sum + (p.soloq?.losses || 0), 0);
-      const mergedChamps = [];
-      for (const acc of sortedByScore) {
-        for (const champ of acc.topChampions || []) {
-          if (!mergedChamps.includes(champ)) mergedChamps.push(champ);
-          if (mergedChamps.length === 3) break;
-        }
-        if (mergedChamps.length === 3) break;
-      }
 
       return {
         ...bestSoloqAccount,
@@ -610,17 +619,15 @@ export default function App() {
           : owner,
         mainAccountRiotId: bestSoloqAccount?.riotId || null,
         emote: accounts.find((a) => a.emote)?.emote || bestSoloqAccount?.emote || null,
-        mainRole: getMainRoleFromAccounts(accounts) || normalizeRole(bestSoloqAccount?.mainRole) || null,
-        topChampions: mergedChamps,
+        mainRole: normalizeRole(bestSoloqAccount?.mainRole) || getMainRoleFromAccounts(accounts) || null,
+        topChampions: (bestSoloqAccount?.topChampions || []).slice(0, 3),
         altAccounts: sortedByScore
           .map((a) => a.riotId)
           .filter((id) => id && id !== primaryRiotId)
           .slice(0, 2),
         altAccountsHiddenCount: Math.max(0, accounts.length - 1 - 2),
         accountCount: accounts.length,
-        soloq: bestSoloqAccount?.soloq
-          ? { ...bestSoloqAccount.soloq, wins, losses }
-          : null,
+        soloq: bestSoloqAccount?.soloq ? { ...bestSoloqAccount.soloq } : null,
       };
     });
   }, [players]);
@@ -652,6 +659,18 @@ export default function App() {
     }
     return map;
   }, [groupedPlayers]);
+  const openOpggForPlayer = useCallback((player) => {
+    const targetRiotId = player?.mainAccountRiotId || player?.riotId || null;
+    const opggUrl = buildOpggUrlFromRiotId(targetRiotId);
+    if (!opggUrl) return;
+    window.open(opggUrl, "_blank", "noopener,noreferrer");
+  }, []);
+
+  const handleOpenOpggKeyDown = useCallback((event, player) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    openOpggForPlayer(player);
+  }, [openOpggForPlayer]);
   const duelPlayers = duelConfig.map((owner) => groupedPlayersByOwner.get(owner.toLowerCase()) || null);
   const duelLpA = duelPlayers[0]?.soloq?.leaguePoints ?? null;
   const duelLpB = duelPlayers[1]?.soloq?.leaguePoints ?? null;
@@ -673,8 +692,37 @@ export default function App() {
       : null;
 
   const usersMasonryPlayers = useMemo(() => {
-    const withIcons = players.filter((p) => p?.profileIconId);
-    const source = withIcons.length > 0 ? withIcons : players;
+    const dedupedMap = new Map();
+    for (const player of players) {
+      if (!player) continue;
+      const dedupeKey = player.puuid || String(player.riotId || "").toLowerCase();
+      if (!dedupeKey) continue;
+
+      const existing = dedupedMap.get(dedupeKey);
+      if (!existing) {
+        dedupedMap.set(dedupeKey, player);
+        continue;
+      }
+
+      // Prefer the richer snapshot when duplicates exist.
+      const existingScore =
+        (existing.profileIconId ? 2 : 0)
+        + (existing.soloq ? 1 : 0)
+        + (existing.flex ? 1 : 0);
+      const candidateScore =
+        (player.profileIconId ? 2 : 0)
+        + (player.soloq ? 1 : 0)
+        + (player.flex ? 1 : 0);
+      if (candidateScore > existingScore) {
+        dedupedMap.set(dedupeKey, player);
+      }
+    }
+
+    const uniquePlayers = Array.from(dedupedMap.values());
+    const withIcons = uniquePlayers.filter((p) => p?.profileIconId);
+    const withoutIcons = uniquePlayers.filter((p) => !p?.profileIconId);
+    // Keep players without icon visible (e.g., newly added or API-missing icon data).
+    const source = [...withIcons, ...withoutIcons];
     const shuffled = [...source];
 
     for (let i = shuffled.length - 1; i > 0; i -= 1) {
@@ -748,41 +796,12 @@ export default function App() {
     </>
   );
 
-  const getActivityStats = () => {
-    const ranked = groupedPlayers.filter((p) => !p.error && p.soloq);
-    if (ranked.length === 0) return null;
-    
-    const topLP = ranked.reduce((max, p) => 
-      (!max || p.soloq.leaguePoints > max.soloq.leaguePoints) ? p : max
-    );
-    
-    const tierCounts = ranked.reduce((acc, p) => {
-      acc[p.soloq.tier] = (acc[p.soloq.tier] || 0) + 1;
-      return acc;
-    }, {});
-    const mostCommonTier = Object.entries(tierCounts).sort((a, b) => b[1] - a[1])[0];
-    
-    const roleCounts = ranked.reduce((acc, p) => {
-      if (p.mainRole) acc[p.mainRole] = (acc[p.mainRole] || 0) + 1;
-      return acc;
-    }, {});
-    const mostCommonRole = Object.entries(roleCounts).sort((a, b) => b[1] - a[1])[0];
-    
-    return { topLP, mostCommonTier, mostCommonRole };
-  };
-
-  const stats = getActivityStats();
   const dailyHighlights = apiStatus?.dailyHighlights || null;
-  const bestOverallToday = dailyHighlights?.bestOverallGain || null;
   const bestSoloToday = dailyHighlights?.bestSoloqGain || null;
   const bestFlexToday = dailyHighlights?.bestFlexGain || null;
   const worstSoloToday = dailyHighlights?.worstSoloqLoss || null;
   const worstOverallToday = dailyHighlights?.worstOverallLoss || null;
-
-  const fallbackTopTodayPlayer = useMemo(() => {
-    if (rankedPlayers.length === 0) return null;
-    return [...rankedPlayers].sort((a, b) => getSoloqScore(b) - getSoloqScore(a))[0] || null;
-  }, [rankedPlayers]);
+  const worstToday = worstOverallToday || worstSoloToday;
 
   const rankingContent = (
     <>
@@ -862,17 +881,17 @@ export default function App() {
 
         <div className="activity-grid">
           <div className="activity-card activity-card--winner">
-            <span className="activity-label">Ganador LPs hoy (global)</span>
-            <span className="activity-value">{bestOverallToday?.player || fallbackTopTodayPlayer?.riotId || "—"}</span>
-            <span className="activity-delta-hero activity-delta-hero--up">{formatSignedLps(bestOverallToday?.deltaLp ?? 0)}</span>
-            <span className="activity-detail">{formatLpDelta(bestOverallToday?.deltaLp ?? 0)}</span>
+            <span className="activity-label">Ganador LPs hoy (SOLOQ)</span>
+            <span className="activity-value">{bestSoloToday?.player || "—"}</span>
+            <span className="activity-delta-hero activity-delta-hero--up">{bestSoloToday ? formatSignedLps(bestSoloToday.deltaLp) : "—"}</span>
+            <span className="activity-detail">{bestSoloToday ? formatLpDelta(bestSoloToday.deltaLp) : "—"}</span>
           </div>
 
           <div className="activity-card activity-card--winner">
             <span className="activity-label">Ganador LPs hoy (FLEX)</span>
             <span className="activity-value">{bestFlexToday?.player || "—"}</span>
-            <span className="activity-delta-hero activity-delta-hero--up">{formatSignedLps(bestFlexToday?.deltaLp ?? 0)}</span>
-            <span className="activity-detail">{formatLpDelta(bestFlexToday?.deltaLp ?? 0)}</span>
+            <span className="activity-delta-hero activity-delta-hero--up">{bestFlexToday ? formatSignedLps(bestFlexToday.deltaLp) : "—"}</span>
+            <span className="activity-detail">{bestFlexToday ? formatLpDelta(bestFlexToday.deltaLp) : "—"}</span>
           </div>
 
           <div className="activity-card activity-card--signals">
@@ -882,9 +901,9 @@ export default function App() {
 
           <div className="activity-card activity-card--loser">
             <span className="activity-label">Perdedor LPs hoy (global)</span>
-            <span className="activity-value">{worstOverallToday?.player || worstSoloToday?.player || "—"}</span>
-            <span className="activity-delta-hero activity-delta-hero--down">{formatLossLps(worstOverallToday?.deltaLp ?? worstSoloToday?.deltaLp ?? 0)}</span>
-            <span className="activity-detail">{formatLpDelta(-Math.abs(Number(worstOverallToday?.deltaLp ?? worstSoloToday?.deltaLp ?? 0) || 0))}</span>
+            <span className="activity-value">{worstToday?.player || "—"}</span>
+            <span className="activity-delta-hero activity-delta-hero--down">{worstToday ? formatLossLps(worstToday.deltaLp) : "—"}</span>
+            <span className="activity-detail">{worstToday ? formatLpDelta(worstToday.deltaLp) : "—"}</span>
           </div>
         </div>
       </div>
@@ -946,11 +965,17 @@ export default function App() {
             <div className="ladder">
               {filteredPlayers.map((p) => {
                 const playerWarnings = buildPlayerWarnings(p);
+                const playerOpggUrl = buildOpggUrlFromRiotId(p.mainAccountRiotId || p.riotId);
                 return (
                   <div
                     key={p.groupKey || p.riotId}
-                    className={`player-row ${p.error ? "player-error" : ""} ${p._rank <= 3 ? `player-top player-top-${p._rank}` : "player-regular"}`}
+                    className={`player-row ${playerOpggUrl ? "player-row--clickable" : ""} ${p.error ? "player-error" : ""} ${p._rank <= 3 ? `player-top player-top-${p._rank}` : "player-regular"}`}
                     style={{ "--tier-color": TIER_COLORS[p.soloq?.tier] || "var(--line)" }}
+                    role={playerOpggUrl ? "button" : undefined}
+                    tabIndex={playerOpggUrl ? 0 : undefined}
+                    onClick={playerOpggUrl ? () => openOpggForPlayer(p) : undefined}
+                    onKeyDown={playerOpggUrl ? (event) => handleOpenOpggKeyDown(event, p) : undefined}
+                    title={playerOpggUrl ? `Abrir op.gg: ${p.mainAccountRiotId || p.riotId}` : undefined}
                   >
                     <span className="pos">{p._rank}</span>
 
@@ -965,10 +990,10 @@ export default function App() {
                       <div className="player-info">
                         {p.emote && <span className="riot-emote">{formatMoteDisplay(p.emote)}</span>}
                         {shouldRenderRiotId(p.emote, p.riotId) && <span className="riot-id">{p.riotId}</span>}
-                        <span className="riot-alts">{p.mainAccountRiotId || p.riotId}</span>
+                        {p.accountCount > 1 && <span className="riot-alts">Cuenta top: {p.mainAccountRiotId || p.riotId}</span>}
                         {p.altAccounts?.length > 0 && (
                           <span className="riot-alts">
-                            Alt: {p.altAccounts.join(" · ")}
+                            Smurfs: {p.altAccounts.join(" · ")}
                             {p.altAccountsHiddenCount > 0 ? ` · +${p.altAccountsHiddenCount}` : ""}
                           </span>
                         )}
@@ -1037,17 +1062,28 @@ export default function App() {
             {filteredPlayers.slice(0, 10).length === 0 ? (
               <div className="empty">No hay jugadores en el ranking.</div>
             ) : (
-              filteredPlayers.slice(0, 10).map((p) => (
-                <div key={p.groupKey || p.riotId} className="hachita-card">
-                  <div className="hachita-rank-badge">{p._rank}</div>
-                  <div className="hachita-info">
-                    <div className="hachita-name">{p.emote ? `${p.emote} · ${p.riotId}` : p.riotId}</div>
-                    <div className="hachita-tier">{p.soloq?.tier || "Sin rank"} {p.soloq?.rank || ""}</div>
-                    {p.altAccounts?.length > 0 && <div className="hachita-tier">Alts: {p.altAccounts.join(" · ")}</div>}
+              filteredPlayers.slice(0, 10).map((p) => {
+                const playerOpggUrl = buildOpggUrlFromRiotId(p.mainAccountRiotId || p.riotId);
+                return (
+                  <div
+                    key={p.groupKey || p.riotId}
+                    className={`hachita-card ${playerOpggUrl ? "hachita-card--clickable" : ""}`}
+                    role={playerOpggUrl ? "button" : undefined}
+                    tabIndex={playerOpggUrl ? 0 : undefined}
+                    onClick={playerOpggUrl ? () => openOpggForPlayer(p) : undefined}
+                    onKeyDown={playerOpggUrl ? (event) => handleOpenOpggKeyDown(event, p) : undefined}
+                    title={playerOpggUrl ? `Abrir op.gg: ${p.mainAccountRiotId || p.riotId}` : undefined}
+                  >
+                    <div className="hachita-rank-badge">{p._rank}</div>
+                    <div className="hachita-info">
+                      <div className="hachita-name">{p.emote ? `${p.emote} · ${p.riotId}` : p.riotId}</div>
+                      <div className="hachita-tier">{p.soloq?.tier || "Sin rank"} {p.soloq?.rank || ""}</div>
+                      {p.altAccounts?.length > 0 && <div className="hachita-tier">Alts: {p.altAccounts.join(" · ")}</div>}
+                    </div>
+                    <div className="hachita-lp">{p.soloq?.leaguePoints || 0} LP</div>
                   </div>
-                  <div className="hachita-lp">{p.soloq?.leaguePoints || 0} LP</div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </>

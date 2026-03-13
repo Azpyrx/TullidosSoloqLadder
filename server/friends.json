@@ -87,6 +87,13 @@
   {
     "gameName": "Mercurio",
     "tagLine": "Ego",
-    "puuid": "uDsTn72cvMPc5z_mQQq2pk642u2fsLXalcziQxkgvxeH9CUmUwnN7Lu7ssUl9qz5C5-g0n_iRLEtQw"
+    "puuid": "uDsTn72cvMPc5z_mQQq2pk642u2fsLXalcziQxkgvxeH9CUmUwnN7Lu7ssUl9qz5C5-g0n_iRLEtQw",
+    "mote": "Lucas"
+  },
+  {
+    "gameName": "AlexMago",
+    "tagLine": "EUW",
+    "puuid": "O_gK25JOSxNNHa3FW8tdO3vmfEjS1ych2thDco1XJZx2Lga36os_VlDGroUrIMGCjmArZtz_rRTudw",
+    "mote": "Mago"
   }
 ]
