@@ -22,7 +22,7 @@ body {
   color: var(--text);
   min-height: 100vh;
   overflow-x: hidden;
-  background: linear-gradient(135deg, #0f0419 0%, #1a0a2e 50%, #16213e 100%);
+  background: #070b12;
   background-attachment: scroll;
 }
 
@@ -31,6 +31,7 @@ body {
   position: relative;
   z-index: 10;
   overflow-x: clip;
+  background: linear-gradient(180deg, rgba(7, 11, 18, 0.2), rgba(7, 11, 18, 0.55));
 }
 
 .page-content {
