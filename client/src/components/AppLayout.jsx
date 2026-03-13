@@ -3,6 +3,7 @@ import FooterCarousel from "./FooterCarousel.jsx";
 
 const TABS = [
   { id: "ranking", label: "Ranking" },
+  { id: "activity", label: "Actividad" },
   { id: "users", label: "Usuarios" },
   { id: "info", label: "Informacion" },
 ];

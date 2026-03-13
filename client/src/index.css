@@ -633,6 +633,139 @@ button:disabled {
   color: #d5e4ff;
 }
 
+/* -- Live ranking popup for finished games -- */
+.rank-activity-popup-layer {
+  position: fixed;
+  top: 94px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(940px, calc(100vw - 34px));
+  z-index: 120;
+  pointer-events: none;
+}
+
+.rank-activity-popup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 24px;
+  border-radius: 18px;
+  border: 1px solid rgba(121, 197, 255, 0.56);
+  background:
+    radial-gradient(circle at 14% 10%, rgba(124, 213, 255, 0.34), transparent 42%),
+    radial-gradient(circle at 88% 84%, rgba(255, 183, 98, 0.24), transparent 38%),
+    linear-gradient(135deg, rgba(6, 19, 45, 0.98), rgba(12, 29, 61, 0.96));
+  box-shadow: 0 24px 52px rgba(0, 0, 0, 0.48), 0 0 0 1px rgba(126, 188, 255, 0.22) inset;
+  animation: rankPopupBoom 4.2s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+.rank-activity-popup--clickable {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.rank-activity-popup--clickable:focus-visible {
+  outline: 2px solid rgba(196, 232, 255, 0.95);
+  outline-offset: 2px;
+}
+
+.rank-activity-popup__kicker {
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #b7dfff;
+}
+
+.rank-activity-popup__head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.rank-activity-popup__champ {
+  width: 54px;
+  height: 54px;
+  border-radius: 12px;
+  border: 1px solid rgba(160, 216, 255, 0.65);
+  object-fit: cover;
+  background: rgba(8, 18, 36, 0.78);
+}
+
+.rank-activity-popup__player {
+  font-size: clamp(1.3rem, 2.6vw, 2.2rem);
+  font-weight: 900;
+  color: #f5fbff;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rank-activity-popup__delta {
+  padding: 9px 14px;
+  border-radius: 999px;
+  font-size: clamp(1rem, 2vw, 1.45rem);
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  border: 1px solid transparent;
+  line-height: 1;
+}
+
+.rank-activity-popup__delta.is-up {
+  color: #9ff7c8;
+  background: rgba(36, 133, 88, 0.35);
+  border-color: rgba(119, 237, 177, 0.58);
+  text-shadow: 0 0 10px rgba(119, 237, 177, 0.45);
+}
+
+.rank-activity-popup__delta.is-down {
+  color: #ffb9bf;
+  background: rgba(145, 49, 57, 0.38);
+  border-color: rgba(255, 150, 160, 0.58);
+  text-shadow: 0 0 10px rgba(255, 150, 160, 0.4);
+}
+
+.rank-activity-popup__text {
+  margin: 0;
+  font-size: clamp(1rem, 1.9vw, 1.35rem);
+  font-weight: 700;
+  color: #d8ebff;
+  line-height: 1.35;
+}
+
+.rank-activity-popup__kda {
+  align-self: flex-start;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(137, 192, 255, 0.5);
+  background: rgba(14, 33, 66, 0.62);
+  color: #b8d8ff;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+@keyframes rankPopupBoom {
+  0% {
+    opacity: 0;
+    transform: translateY(-22px) scale(0.94);
+  }
+  10% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  82% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.98);
+  }
+}
+
 /* -- Activity Section -- */
 .activity-section {
   margin-bottom: 20px;
@@ -681,6 +814,23 @@ button:disabled {
   color: #b8d0f0;
   font-size: 12px;
   font-weight: 600;
+}
+
+.activity-meta-pill--button {
+  cursor: pointer;
+  border-radius: 999px;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.activity-meta-pill--button:hover:not(:disabled) {
+  background: rgba(123, 209, 255, 0.2);
+  border-color: rgba(123, 209, 255, 0.5);
+  transform: none;
+}
+
+.activity-meta-pill--button:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
 }
 
 .activity-grid {
@@ -813,6 +963,7 @@ button:disabled {
 .activity-card--signals {
   text-align: left;
   justify-content: flex-start;
+  min-height: 168px;
 }
 
 .activity-card--signals .at {
@@ -820,6 +971,9 @@ button:disabled {
   margin-top: 6px;
   background: rgba(8, 18, 36, 0.52);
   border-color: rgba(114, 177, 255, 0.25);
+  min-height: 94px;
+  max-height: 94px;
+  overflow: hidden;
 }
 
 .at {
@@ -837,6 +991,8 @@ button:disabled {
   gap: 0;
   flex-wrap: wrap;
   min-height: 20px;
+  max-height: 42px;
+  overflow: hidden;
 }
 
 .at__player {
@@ -855,6 +1011,11 @@ button:disabled {
   font-size: 13px;
   font-weight: 600;
   color: #a9c5ec;
+  display: -webkit-box;
+  line-clamp: 2;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .activity-card--signals .at__counter {
@@ -1308,6 +1469,134 @@ button:disabled {
   color: var(--accent);
   min-width: 60px;
   text-align: right;
+}
+
+/* -- Detailed Activity Tab -- */
+.activity-feed-page {
+  border: 1px solid rgba(138, 43, 226, 0.25);
+  border-radius: 14px;
+  background: rgba(18, 29, 45, 0.52);
+  padding: 18px;
+}
+
+.activity-feed-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.activity-feed-header h3 {
+  margin: 0;
+  font-size: 1.25rem;
+  color: #f0f6ff;
+}
+
+.activity-feed-header p {
+  margin: 0;
+  color: #a9bfdc;
+  font-size: 13px;
+}
+
+.activity-feed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.activity-feed-item {
+  display: grid;
+  grid-template-columns: 68px 1fr;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid rgba(138, 43, 226, 0.22);
+  border-radius: 10px;
+  background: rgba(34, 49, 72, 0.44);
+  padding: 10px 12px;
+}
+
+.activity-feed-item--clickable {
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.activity-feed-item--clickable:hover {
+  border-color: rgba(134, 201, 255, 0.52);
+  background: rgba(45, 66, 97, 0.54);
+}
+
+.activity-feed-item--clickable:focus-visible {
+  outline: 2px solid rgba(188, 226, 255, 0.95);
+  outline-offset: 2px;
+}
+
+.activity-feed-item__champ-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.activity-feed-item__champ {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  object-fit: cover;
+  border: 1px solid rgba(186, 210, 242, 0.55);
+  background: rgba(10, 20, 36, 0.72);
+}
+
+.activity-feed-item__champ--empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #bdd2ef;
+  font-weight: 800;
+}
+
+.activity-feed-item__kda {
+  font-size: 12px;
+  color: #d2e4fc;
+  font-weight: 700;
+}
+
+.activity-feed-item__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.activity-feed-item__delta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  font-weight: 800;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  padding: 8px 10px;
+  background: rgba(58, 87, 121, 0.42);
+  color: #b9d5fa;
+  width: fit-content;
+  min-width: 76px;
+}
+
+.activity-feed-item__delta.is-up {
+  background: rgba(35, 122, 82, 0.33);
+  color: #9cf1ca;
+}
+
+.activity-feed-item__delta.is-down {
+  background: rgba(137, 49, 56, 0.35);
+  color: #ffb4bc;
+}
+
+.activity-feed-item__text {
+  margin: 0;
+  color: #eaf1fb;
+  font-size: 14px;
+  line-height: 1.45;
 }
 
 .player-main {
@@ -1975,6 +2264,48 @@ button:disabled {
 
   .rank-search {
     min-width: 0;
+  }
+
+  .rank-activity-popup-layer {
+    top: 84px;
+    width: calc(100vw - 18px);
+  }
+
+  .rank-activity-popup {
+    padding: 14px 12px;
+    border-radius: 14px;
+    gap: 8px;
+  }
+
+  .rank-activity-popup__head {
+    grid-template-columns: 44px minmax(0, 1fr);
+    grid-template-areas:
+      "champ player"
+      "delta delta";
+    gap: 8px 10px;
+  }
+
+  .rank-activity-popup__champ {
+    grid-area: champ;
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+  }
+
+  .rank-activity-popup__player {
+    grid-area: player;
+    font-size: clamp(1.1rem, 5.2vw, 1.45rem);
+  }
+
+  .rank-activity-popup__delta {
+    grid-area: delta;
+    justify-self: start;
+    font-size: 1rem;
+    padding: 8px 12px;
+  }
+
+  .rank-activity-popup__text {
+    font-size: 0.96rem;
   }
 
   .role-pills {

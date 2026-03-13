@@ -108,20 +108,20 @@ const ROLE_ICONS = {
   UTILITY: `${API_BASE}/assets/icons/position/support.png`,
 };
 
-const TIER_POINTS = {
-  IRON: 1000,
-  BRONZE: 2000,
-  SILVER: 3000,
-  GOLD: 4000,
-  PLATINUM: 5000,
-  EMERALD: 6000,
-  DIAMOND: 7000,
-  MASTER: 8000,
-  GRANDMASTER: 9000,
-  CHALLENGER: 10000,
-};
+const TIER_ORDER = [
+  "IRON",
+  "BRONZE",
+  "SILVER",
+  "GOLD",
+  "PLATINUM",
+  "EMERALD",
+  "DIAMOND",
+  "MASTER",
+  "GRANDMASTER",
+  "CHALLENGER",
+];
 
-const DIVISION_POINTS = { IV: 1, III: 2, II: 3, I: 4 };
+const DIVISION_INDEX = { IV: 0, III: 1, II: 2, I: 3 };
 
 const PLAYER_OWNER_ALIASES = {
   "hachitas#norge": "Hachitas",
@@ -151,9 +151,17 @@ function normalizeRole(role) {
 
 function getSoloqScore(player) {
   if (!player?.soloq) return -1;
-  const tierValue = TIER_POINTS[player.soloq.tier] || 0;
-  const divisionValue = DIVISION_POINTS[player.soloq.rank] || 0;
-  return tierValue + divisionValue * 100 + (player.soloq.leaguePoints || 0);
+  const safeTier = String(player?.soloq?.tier || "").toUpperCase();
+  const safeRank = String(player?.soloq?.rank || "").toUpperCase();
+  const safeLp = Number(player?.soloq?.leaguePoints);
+  if (!Number.isFinite(safeLp)) return -1;
+
+  const tierIdx = TIER_ORDER.indexOf(safeTier);
+  if (tierIdx < 0) return -1;
+  const isApexTier = ["MASTER", "GRANDMASTER", "CHALLENGER"].includes(safeTier);
+  const divisionIdx = isApexTier ? 3 : (DIVISION_INDEX[safeRank] ?? 0);
+
+  return ((tierIdx * 4) + divisionIdx) * 100 + safeLp;
 }
 
 function buildOpggUrlFromRiotId(riotId) {
@@ -168,9 +176,106 @@ function buildOpggUrlFromRiotId(riotId) {
   return `https://www.op.gg/summoners/euw/${slug}`;
 }
 
+function buildOpggMatchUrlFromEntry(entry) {
+  const matchId = String(entry?.matchId || "").trim();
+  if (!matchId) return null;
+  const normalizedGameId = matchId.includes("_") ? matchId.split("_").pop() : matchId;
+  if (!normalizedGameId) return null;
+  return `https://www.leagueofgraphs.com/match/euw/${encodeURIComponent(normalizedGameId)}`;
+}
+
+function formatActivityText(text) {
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  if (!clean) return "";
+  return clean.replace(/\s*p\.j\.$/i, "").trim();
+}
+
+function playActivityPopupSound(delta) {
+  if (typeof window === "undefined") return;
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return;
+
+  const safeDelta = Number(delta);
+  const nowSeconds = 0;
+
+  try {
+    const ctx = new AudioCtx();
+    const base = ctx.currentTime;
+    const master = ctx.createGain();
+    master.gain.value = 0.0001;
+    master.connect(ctx.destination);
+
+    const sequence = safeDelta > 0
+      ? [523.25, 659.25, 783.99]
+      : [392.0, 329.63, 261.63];
+
+    sequence.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = safeDelta > 0 ? "triangle" : "sawtooth";
+      osc.frequency.setValueAtTime(freq, base + nowSeconds + (idx * 0.09));
+
+      gain.gain.setValueAtTime(0.0001, base + nowSeconds + (idx * 0.09));
+      gain.gain.exponentialRampToValueAtTime(0.09, base + nowSeconds + (idx * 0.09) + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, base + nowSeconds + (idx * 0.09) + 0.12);
+
+      osc.connect(gain);
+      gain.connect(master);
+      osc.start(base + nowSeconds + (idx * 0.09));
+      osc.stop(base + nowSeconds + (idx * 0.09) + 0.14);
+    });
+
+    master.gain.setValueAtTime(0.0001, base);
+    master.gain.exponentialRampToValueAtTime(0.18, base + 0.02);
+    master.gain.exponentialRampToValueAtTime(0.0001, base + 0.5);
+
+    setTimeout(() => {
+      ctx.close().catch(() => {});
+    }, 650);
+  } catch {
+    // Some browsers block autoplay audio until user interaction.
+  }
+}
+
+const CHAMPION_ASSET_ALIASES = {
+  fiddlesticks: "Fiddlesticks",
+  fiddlestick: "Fiddlesticks",
+  monkeyking: "MonkeyKing",
+  nunuandwillump: "Nunu",
+  khazix: "Khazix",
+  kogmaw: "KogMaw",
+  chogath: "Chogath",
+  reksai: "RekSai",
+  belveth: "Belveth",
+  drmundo: "DrMundo",
+  jarvaniv: "JarvanIV",
+  leesin: "LeeSin",
+  masteryi: "MasterYi",
+  missfortune: "MissFortune",
+  tahmkench: "TahmKench",
+  twistedfate: "TwistedFate",
+  xinzhao: "XinZhao",
+  aurelionsol: "AurelionSol",
+  renataglasc: "Renata",
+};
+
+function getChampionAssetName(name) {
+  const raw = String(name || "").trim();
+  if (!raw) return "";
+  const compact = raw.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+  return CHAMPION_ASSET_ALIASES[compact] || raw;
+}
+
 function hasPromosInTier(tier) {
   const safeTier = String(tier || "").toUpperCase();
   return !["MASTER", "GRANDMASTER", "CHALLENGER"].includes(safeTier);
+}
+
+function getPromoWinsNeeded(lp) {
+  const safeLp = Number(lp);
+  if (!Number.isFinite(safeLp)) return 2;
+  // Aproximacion simple con +25 LP por victoria para estimar proximidad a promo.
+  return Math.max(1, Math.ceil((100 - safeLp) / 25));
 }
 
 function getMainRoleFromAccounts(accounts) {
@@ -189,6 +294,35 @@ function getMainRoleFromAccounts(accounts) {
     }
   }
   return bestRole;
+}
+
+function getRankedActivityWeight(account) {
+  const soloGames = (Number(account?.soloq?.wins) || 0) + (Number(account?.soloq?.losses) || 0);
+  const flexGames = (Number(account?.flex?.wins) || 0) + (Number(account?.flex?.losses) || 0);
+  const totalRankedGames = soloGames + flexGames;
+  return Math.max(1, totalRankedGames);
+}
+
+function getTopChampionsFromAccounts(accounts) {
+  const champScore = new Map();
+  for (const account of accounts || []) {
+    const champs = Array.isArray(account?.topChampions) ? account.topChampions.slice(0, 3) : [];
+    if (champs.length === 0) continue;
+
+    const activityWeight = getRankedActivityWeight(account);
+    champs.forEach((champ, idx) => {
+      if (!champ) return;
+      // Primer pick pesa mas que segundo/tercero, y se pondera por actividad ranked.
+      const rankWeight = Math.max(1, 3 - idx);
+      const score = rankWeight * activityWeight;
+      champScore.set(champ, (champScore.get(champ) || 0) + score);
+    });
+  }
+
+  return Array.from(champScore.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([champ]) => champ);
 }
 
 function hashSignalSeed(value) {
@@ -242,8 +376,10 @@ function buildPlayerWarnings(player) {
     }
   }
 
-  if (hasPromosInTier(player.soloq.tier) && (player.soloq.leaguePoints || 0) >= 70) {
-    notes.push("A 2 wins de promo");
+  const currentLp = Number(player?.soloq?.leaguePoints) || 0;
+  if (hasPromosInTier(player.soloq.tier) && currentLp >= 70) {
+    const winsToPromo = getPromoWinsNeeded(currentLp);
+    notes.push(`A ${winsToPromo} win${winsToPromo === 1 ? "" : "s"} de promo`);
   }
 
   return notes
@@ -377,6 +513,14 @@ function formatLossLps(delta) {
   return `-${Math.abs(Math.trunc(safe))} LPs`;
 }
 
+function getActivityEntryKey(entry, idx) {
+  if (entry?.key) return String(entry.key);
+  const player = String(entry?.player || "player");
+  const updatedAt = String(entry?.updatedAt || idx);
+  const delta = Number.isFinite(Number(entry?.lpDelta)) ? Number(entry.lpDelta) : 0;
+  return `${player}:${updatedAt}:${delta}`;
+}
+
 function formatQueueSummary(queue) {
   if (!queue) return null;
   const wins = Number(queue.wins) || 0;
@@ -431,7 +575,7 @@ function ChampIcons({ champions, version }) {
           <img
             key={`${name}-${idx}`}
             className="champ-icon"
-            src={`https://ddragon.leagueoflegends.com/cdn/${version}/img/champion/${name}.png`}
+            src={`https://ddragon.leagueoflegends.com/cdn/${version}/img/champion/${getChampionAssetName(name)}.png`}
             alt={name}
             title={name}
             onError={(e) => { e.target.style.display = "none"; }}
@@ -510,6 +654,14 @@ function ActivityTicker({ groupedPlayers }) {
 export default function App() {
   const [activeTab, setActiveTab] = useState("ranking");
   const [players, setPlayers] = useState([]);
+  const [activityFeed, setActivityFeed] = useState([]);
+  const [activityFeedMeta, setActivityFeedMeta] = useState({
+    date: null,
+    updatedAt: null,
+  });
+  const [activityFeedLoading, setActivityFeedLoading] = useState(false);
+  const [rankingActivityQueue, setRankingActivityQueue] = useState([]);
+  const [rankingActivityPopup, setRankingActivityPopup] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -523,6 +675,8 @@ export default function App() {
   });
   const [apiStatus, setApiStatus] = useState(null);
   const statusSignatureRef = useRef("");
+  const activityFeedSeenKeysRef = useRef(new Set());
+  const activityFeedSeededRef = useRef(false);
 
   const loadLadder = useCallback(async (background = false) => {
     if (!background) setLoading(true);
@@ -552,6 +706,68 @@ export default function App() {
     loadLadder();
   }, [loadLadder]);
 
+  const queueIncomingActivityPopups = useCallback((entries) => {
+    const safeEntries = Array.isArray(entries) ? entries : [];
+    if (safeEntries.length === 0) return;
+
+    const seenKeys = activityFeedSeenKeysRef.current;
+
+    if (!activityFeedSeededRef.current) {
+      safeEntries.forEach((entry, idx) => {
+        seenKeys.add(getActivityEntryKey(entry, idx));
+      });
+      activityFeedSeededRef.current = true;
+      return;
+    }
+
+    const incoming = [];
+    safeEntries.forEach((entry, idx) => {
+      const entryKey = getActivityEntryKey(entry, idx);
+      if (seenKeys.has(entryKey)) return;
+      seenKeys.add(entryKey);
+
+      // Popups should focus on newly finished games with LP movement.
+      if (Number(entry?.lpDelta) === 0) return;
+      incoming.push({
+        ...entry,
+        key: entryKey,
+      });
+    });
+
+    if (incoming.length > 0) {
+      setRankingActivityQueue((prev) => [...prev, ...incoming.slice(0, 5)]);
+    }
+  }, []);
+
+  const loadActivityFeed = useCallback(async (background = false, options = {}) => {
+    if (!background) setActivityFeedLoading(true);
+    try {
+      const res = await fetch(`${API}/api/activity-feed`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const entries = Array.isArray(data?.entries) ? data.entries : [];
+      setActivityFeed(entries);
+      setActivityFeedMeta({
+        date: data?.date || null,
+        updatedAt: data?.updatedAt || null,
+      });
+
+      if (options.showPopupOnNew) {
+        queueIncomingActivityPopups(entries);
+      } else if (!activityFeedSeededRef.current) {
+        queueIncomingActivityPopups(entries);
+      }
+    } catch {
+      // Keep previous data when the feed endpoint fails temporarily.
+    } finally {
+      if (!background) setActivityFeedLoading(false);
+    }
+  }, [queueIncomingActivityPopups]);
+
+  useEffect(() => {
+    loadActivityFeed();
+  }, [loadActivityFeed]);
+
   useEffect(() => {
     if (activeTab !== "ranking") return;
     const timer = setInterval(() => {
@@ -559,6 +775,38 @@ export default function App() {
     }, 120 * 1000);
     return () => clearInterval(timer);
   }, [activeTab, loadLadder]);
+
+  useEffect(() => {
+    if (activeTab !== "activity") return;
+    const timer = setInterval(() => {
+      loadActivityFeed(true);
+    }, 45 * 1000);
+    return () => clearInterval(timer);
+  }, [activeTab, loadActivityFeed]);
+
+  useEffect(() => {
+    if (activeTab !== "ranking") return;
+    const timer = setInterval(() => {
+      loadActivityFeed(true, { showPopupOnNew: true });
+    }, 20 * 1000);
+    return () => clearInterval(timer);
+  }, [activeTab, loadActivityFeed]);
+
+  useEffect(() => {
+    if (rankingActivityPopup || rankingActivityQueue.length === 0) return;
+    const [nextPopup, ...rest] = rankingActivityQueue;
+    setRankingActivityQueue(rest);
+    setRankingActivityPopup(nextPopup);
+  }, [rankingActivityPopup, rankingActivityQueue]);
+
+  useEffect(() => {
+    if (!rankingActivityPopup) return;
+    playActivityPopupSound(rankingActivityPopup.lpDelta);
+    const timer = setTimeout(() => {
+      setRankingActivityPopup(null);
+    }, 4200);
+    return () => clearTimeout(timer);
+  }, [rankingActivityPopup]);
 
   useEffect(() => {
     if (activeTab !== "ranking") return;
@@ -610,6 +858,7 @@ export default function App() {
       const sortedByScore = [...accounts].sort((a, b) => getSoloqScore(b) - getSoloqScore(a));
       const bestSoloqAccount = sortedByScore[0] || null;
       const primaryRiotId = bestSoloqAccount?.riotId || null;
+      const mergedTopChampions = getTopChampionsFromAccounts(accounts);
 
       return {
         ...bestSoloqAccount,
@@ -620,7 +869,9 @@ export default function App() {
         mainAccountRiotId: bestSoloqAccount?.riotId || null,
         emote: accounts.find((a) => a.emote)?.emote || bestSoloqAccount?.emote || null,
         mainRole: normalizeRole(bestSoloqAccount?.mainRole) || getMainRoleFromAccounts(accounts) || null,
-        topChampions: (bestSoloqAccount?.topChampions || []).slice(0, 3),
+        topChampions: mergedTopChampions.length > 0
+          ? mergedTopChampions
+          : (bestSoloqAccount?.topChampions || []).slice(0, 3),
         altAccounts: sortedByScore
           .map((a) => a.riotId)
           .filter((id) => id && id !== primaryRiotId)
@@ -644,6 +895,14 @@ export default function App() {
     });
 
   const rankedPlayers = groupedPlayers.filter((player) => !player.error);
+  const latestActivityEntry = useMemo(() => {
+    if (!Array.isArray(activityFeed) || activityFeed.length === 0) return null;
+    return [...activityFeed].sort((a, b) => {
+      const aTs = Number(a?.gameEndTimestamp || Date.parse(String(a?.updatedAt || "")) || 0);
+      const bTs = Number(b?.gameEndTimestamp || Date.parse(String(b?.updatedAt || "")) || 0);
+      return bTs - aTs;
+    })[0] || null;
+  }, [activityFeed]);
 
   const duelConfig = ["Hachitas", "Ryt"];
   const duelNicknames = {
@@ -666,11 +925,29 @@ export default function App() {
     window.open(opggUrl, "_blank", "noopener,noreferrer");
   }, []);
 
+  const openOpggUrl = useCallback((url) => {
+    if (!url) return;
+    window.open(url, "_blank", "noopener,noreferrer");
+  }, []);
+
   const handleOpenOpggKeyDown = useCallback((event, player) => {
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
     openOpggForPlayer(player);
   }, [openOpggForPlayer]);
+  const handleOpenActivityEntryKeyDown = useCallback((event, entry) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    openOpggUrl(buildOpggMatchUrlFromEntry(entry));
+  }, [openOpggUrl]);
+  const handleShowSampleRankingPopup = useCallback(() => {
+    if (!latestActivityEntry) return;
+    const previewEntry = {
+      ...latestActivityEntry,
+      key: `sample-${getActivityEntryKey(latestActivityEntry, Date.now())}`,
+    };
+    setRankingActivityPopup(previewEntry);
+  }, [latestActivityEntry]);
   const duelPlayers = duelConfig.map((owner) => groupedPlayersByOwner.get(owner.toLowerCase()) || null);
   const duelLpA = duelPlayers[0]?.soloq?.leaguePoints ?? null;
   const duelLpB = duelPlayers[1]?.soloq?.leaguePoints ?? null;
@@ -802,9 +1079,46 @@ export default function App() {
   const worstSoloToday = dailyHighlights?.worstSoloqLoss || null;
   const worstOverallToday = dailyHighlights?.worstOverallLoss || null;
   const worstToday = worstOverallToday || worstSoloToday;
+  const apiTodayRequests = Number(apiStatus?.todayRequests) || 0;
+  const currentHour = new Date().getHours();
+  const elapsedHoursToday = Math.max(1, currentHour + 1);
+  const apiRequestsPerHour = Math.round(apiTodayRequests / elapsedHoursToday);
+  const rankingPopupMatchUrl = rankingActivityPopup ? buildOpggMatchUrlFromEntry(rankingActivityPopup) : null;
 
   const rankingContent = (
     <>
+      {rankingActivityPopup && (
+        <div className="rank-activity-popup-layer" aria-live="polite" aria-atomic="true">
+          <article
+            className={`rank-activity-popup ${rankingPopupMatchUrl ? "rank-activity-popup--clickable" : ""}`}
+            key={rankingActivityPopup.key || rankingActivityPopup.updatedAt || rankingActivityPopup.player}
+            role={rankingPopupMatchUrl ? "button" : undefined}
+            tabIndex={rankingPopupMatchUrl ? 0 : undefined}
+            onClick={rankingPopupMatchUrl ? () => openOpggUrl(rankingPopupMatchUrl) : undefined}
+            onKeyDown={rankingPopupMatchUrl ? (event) => handleOpenActivityEntryKeyDown(event, rankingActivityPopup) : undefined}
+            title={rankingPopupMatchUrl ? "Abrir partida en OP.GG" : undefined}
+          >
+            <span className="rank-activity-popup__kicker">Actividad en directo</span>
+            <div className="rank-activity-popup__head">
+              {rankingActivityPopup.championName ? (
+                <img
+                  className="rank-activity-popup__champ"
+                  src={`https://ddragon.leagueoflegends.com/cdn/${ddragonVersion}/img/champion/${getChampionAssetName(rankingActivityPopup.championName)}.png`}
+                  alt={rankingActivityPopup.championName}
+                  onError={(e) => { e.target.style.display = "none"; }}
+                />
+              ) : null}
+              <strong className="rank-activity-popup__player">{rankingActivityPopup.player || "Jugador"}</strong>
+              <span className={`rank-activity-popup__delta ${Number(rankingActivityPopup.lpDelta) < 0 ? "is-down" : "is-up"}`}>
+                {Number(rankingActivityPopup.lpDelta) > 0 ? `+${rankingActivityPopup.lpDelta}` : rankingActivityPopup.lpDelta} LP
+              </span>
+            </div>
+            <p className="rank-activity-popup__text">{formatActivityText(rankingActivityPopup.text) || "Acaba de terminar partida"}</p>
+            {rankingActivityPopup.kda && <span className="rank-activity-popup__kda">KDA: {rankingActivityPopup.kda}</span>}
+          </article>
+        </div>
+      )}
+
       <section className="duel-card">
         <div className="duel-head">
           <p className="duel-kicker">Apuesta</p>
@@ -875,7 +1189,16 @@ export default function App() {
           <div className="activity-meta-pills">
             <span className="activity-meta-pill">👥 {players.length} jugadores</span>
             <span className="activity-meta-pill">🎮 {rankedPlayers.length} rankeados</span>
-            <span className="activity-meta-pill">📡 API: total {apiStatus?.totalRequests ?? 0} · hoy {apiStatus?.todayRequests ?? 0}</span>
+            <span className="activity-meta-pill">📡 API: /h {apiRequestsPerHour} · dia {apiTodayRequests}</span>
+            <button
+              type="button"
+              className="activity-meta-pill activity-meta-pill--button"
+              onClick={handleShowSampleRankingPopup}
+              disabled={!latestActivityEntry}
+              title={latestActivityEntry ? "Mostrar ejemplo de popup gigante" : "Sin actividad reciente para mostrar"}
+            >
+              Probar popup enorme
+            </button>
           </div>
         </div>
 
@@ -1139,8 +1462,63 @@ export default function App() {
     </div>
   );
 
+  const activityContent = (
+    <section className="activity-feed-page">
+      <div className="activity-feed-header">
+        <h3>Actividad desglosada</h3>
+        <p>
+          {activityFeedMeta.updatedAt
+            ? `Actualizado: ${new Date(activityFeedMeta.updatedAt).toLocaleString()}`
+            : "Actualizando feed..."}
+        </p>
+      </div>
+
+      {activityFeedLoading && activityFeed.length === 0 ? (
+        <div className="loading">Cargando actividad...</div>
+      ) : activityFeed.length === 0 ? (
+        <div className="empty">No hay cambios de LP hoy todavia.</div>
+      ) : (
+        <div className="activity-feed-list">
+          {activityFeed.map((entry, idx) => (
+            <article
+              key={`${entry.player || "player"}-${entry.updatedAt || idx}`}
+              className={`activity-feed-item ${buildOpggMatchUrlFromEntry(entry) ? "activity-feed-item--clickable" : ""}`}
+              role={buildOpggMatchUrlFromEntry(entry) ? "button" : undefined}
+              tabIndex={buildOpggMatchUrlFromEntry(entry) ? 0 : undefined}
+              onClick={buildOpggMatchUrlFromEntry(entry) ? () => openOpggUrl(buildOpggMatchUrlFromEntry(entry)) : undefined}
+              onKeyDown={buildOpggMatchUrlFromEntry(entry) ? (event) => handleOpenActivityEntryKeyDown(event, entry) : undefined}
+              title={buildOpggMatchUrlFromEntry(entry) ? "Abrir partida en OP.GG" : undefined}
+            >
+              <div className="activity-feed-item__champ-wrap">
+                {entry.championName ? (
+                  <img
+                    className="activity-feed-item__champ"
+                    src={`https://ddragon.leagueoflegends.com/cdn/${ddragonVersion}/img/champion/${getChampionAssetName(entry.championName)}.png`}
+                    alt={entry.championName}
+                    title={entry.championName}
+                    onError={(e) => { e.target.style.display = "none"; }}
+                  />
+                ) : (
+                  <span className="activity-feed-item__champ activity-feed-item__champ--empty">?</span>
+                )}
+                <span className="activity-feed-item__kda">{entry.kda || "s/d"}</span>
+              </div>
+              <div className="activity-feed-item__body">
+                <span className={`activity-feed-item__delta ${Number(entry.lpDelta) < 0 ? "is-down" : "is-up"}`}>
+                  {Number(entry.lpDelta) > 0 ? `+${entry.lpDelta}` : entry.lpDelta} LP
+                </span>
+                <p className="activity-feed-item__text">{formatActivityText(entry.text)}</p>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+
   const tabContent = {
     ranking: rankingContent,
+    activity: activityContent,
     hachitas: hachitasContent,
     users: usersContent,
     info: infoContent,

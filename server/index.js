@@ -33,7 +33,10 @@ const FULL_REFRESH_EVERY_CYCLE = String(process.env.FULL_REFRESH_EVERY_CYCLE || 
 const ACCOUNT_REFRESH_TTL_MS = Number(process.env.ACCOUNT_REFRESH_TTL_MS) || 24 * 60 * 60 * 1000;
 const SUMMONER_REFRESH_TTL_MS = Number(process.env.SUMMONER_REFRESH_TTL_MS) || 6 * 60 * 60 * 1000;
 const LP_STEP_ANOMALY_WINDOW_MS = Number(process.env.LP_STEP_ANOMALY_WINDOW_MS) || 30 * 60 * 1000;
-const LP_STEP_ANOMALY_THRESHOLD = Number(process.env.LP_STEP_ANOMALY_THRESHOLD) || 55;
+const LP_STEP_ANOMALY_THRESHOLD = Number(process.env.LP_STEP_ANOMALY_THRESHOLD) || 350;
+const ACTIVITY_FEED_HISTORY_LIMIT = Math.max(5, Number(process.env.ACTIVITY_FEED_HISTORY_LIMIT) || 20);
+const ACTIVITY_FEED_SCHEMA_VERSION = 3;
+const DELTA_TRACKING_VERSION = 3;
 
 // Riot personal key hard limits: 20 req/1 s, 100 req/2 min.
 // We budget to 18/1 s and 90/2 min for a safety margin.
@@ -256,6 +259,10 @@ async function fetchRecentChampionsAndRole(puuid) {
           id,
           championName: p.championName || null,
           teamPosition: p.teamPosition || null,
+          kills: Number.isFinite(Number(p.kills)) ? Number(p.kills) : null,
+          deaths: Number.isFinite(Number(p.deaths)) ? Number(p.deaths) : null,
+          assists: Number.isFinite(Number(p.assists)) ? Number(p.assists) : null,
+          win: typeof p.win === "boolean" ? p.win : null,
           queueId: match.info.queueId || null,
           gameEndTimestamp: match.info.gameEndTimestamp || match.info.gameStartTimestamp || null,
         });
@@ -348,6 +355,8 @@ const ladderCache = {
   rawDataByPuuid: {},
   dailyLpByDate: {},
   lpSnapshotByPlayer: {},
+  activityFeedHistory: [],
+  activityFeedSchemaVersion: ACTIVITY_FEED_SCHEMA_VERSION,
   refreshCursor: 0,
   lastUpdatedAt: null,
   lastError: null,
@@ -365,6 +374,7 @@ function updateDailyLpTracker(players) {
   const dailyMap = ladderCache.dailyLpByDate[todayKey] || (ladderCache.dailyLpByDate[todayKey] = {});
   const snapshotByPlayer = ladderCache.lpSnapshotByPlayer || (ladderCache.lpSnapshotByPlayer = {});
   const nowIso = new Date().toISOString();
+  let migratedLegacyRows = false;
 
   for (const player of players || []) {
     if (!player || player.error) continue;
@@ -373,42 +383,113 @@ function updateDailyLpTracker(players) {
 
     const soloLp = Number(player?.soloq?.leaguePoints);
     const flexLp = Number(player?.flex?.leaguePoints);
+    const soloTier = String(player?.soloq?.tier || "").toUpperCase() || null;
+    const soloRank = String(player?.soloq?.rank || "").toUpperCase() || null;
+    const flexTier = String(player?.flex?.tier || "").toUpperCase() || null;
+    const flexRank = String(player?.flex?.rank || "").toUpperCase() || null;
+    const soloScore = Number.isFinite(soloLp) ? getQueueStandingScore(soloTier, soloRank, soloLp) : null;
+    const flexScore = Number.isFinite(flexLp) ? getQueueStandingScore(flexTier, flexRank, flexLp) : null;
 
     const entry = dailyMap[key] || {
       puuid: player.puuid || null,
       riotId: player.riotId || "Unknown",
       soloqStartLp: Number.isFinite(soloLp) ? soloLp : null,
       soloqCurrentLp: Number.isFinite(soloLp) ? soloLp : null,
+      soloqStartScore: Number.isFinite(soloScore) ? soloScore : null,
+      soloqCurrentScore: Number.isFinite(soloScore) ? soloScore : null,
       soloqDeltaLp: 0,
       soloqLastDeltaLp: 0,
       soloqBestSingleGainLp: 0,
+      soloqTier: soloTier,
+      soloqRank: soloRank,
       flexStartLp: Number.isFinite(flexLp) ? flexLp : null,
       flexCurrentLp: Number.isFinite(flexLp) ? flexLp : null,
+      flexStartScore: Number.isFinite(flexScore) ? flexScore : null,
+      flexCurrentScore: Number.isFinite(flexScore) ? flexScore : null,
       flexDeltaLp: 0,
+      flexTier,
+      flexRank,
+      deltaTrackingVersion: DELTA_TRACKING_VERSION,
       firstSeenAt: nowIso,
       lastSeenAt: nowIso,
     };
 
     const playerSnapshot = snapshotByPlayer[key] || {
       soloqLp: null,
+      soloqScore: null,
       flexLp: null,
+      flexScore: null,
       lastDateKey: null,
       lastSeenAt: null,
     };
 
     entry.riotId = player.riotId || entry.riotId;
     entry.puuid = player.puuid || entry.puuid;
+    entry.soloqTier = soloTier || entry.soloqTier || null;
+    entry.soloqRank = soloRank || entry.soloqRank || null;
+    entry.flexTier = flexTier || entry.flexTier || null;
+    entry.flexRank = flexRank || entry.flexRank || null;
 
-    if (Number.isFinite(soloLp)) {
+    if (Number(entry.deltaTrackingVersion || 0) < DELTA_TRACKING_VERSION) {
+      migratedLegacyRows = true;
+      if (Number.isFinite(soloScore)) {
+        const knownSoloDelta = Number(entry.soloqDeltaLp);
+        const reconstructedSoloDelta = Number.isFinite(knownSoloDelta) ? knownSoloDelta : 0;
+        entry.soloqCurrentLp = Number.isFinite(soloLp) ? soloLp : entry.soloqCurrentLp;
+        entry.soloqStartScore = soloScore - reconstructedSoloDelta;
+        entry.soloqCurrentScore = soloScore;
+        entry.soloqDeltaLp = reconstructedSoloDelta;
+        entry.soloqLastDeltaLp = Number.isFinite(Number(entry.soloqLastDeltaLp)) ? Number(entry.soloqLastDeltaLp) : 0;
+        entry.soloqBestSingleGainLp = Number.isFinite(Number(entry.soloqBestSingleGainLp)) ? Number(entry.soloqBestSingleGainLp) : 0;
+        playerSnapshot.soloqScore = soloScore;
+      }
+      if (Number.isFinite(flexScore)) {
+        const knownFlexDelta = Number(entry.flexDeltaLp);
+        const reconstructedFlexDelta = Number.isFinite(knownFlexDelta) ? knownFlexDelta : 0;
+        entry.flexCurrentLp = Number.isFinite(flexLp) ? flexLp : entry.flexCurrentLp;
+        entry.flexStartScore = flexScore - reconstructedFlexDelta;
+        entry.flexCurrentScore = flexScore;
+        entry.flexDeltaLp = reconstructedFlexDelta;
+        playerSnapshot.flexScore = flexScore;
+      }
+      entry.deltaTrackingVersion = DELTA_TRACKING_VERSION;
+    }
+
+    if (!Number.isFinite(Number(entry.soloqStartScore)) && Number.isFinite(soloScore)) {
+      entry.soloqCurrentLp = Number.isFinite(soloLp) ? soloLp : entry.soloqCurrentLp;
+      const knownSoloDelta = Number(entry.soloqDeltaLp);
+      entry.soloqStartScore = soloScore - (Number.isFinite(knownSoloDelta) ? knownSoloDelta : 0);
+      entry.soloqCurrentScore = soloScore;
+    }
+    if (!Number.isFinite(Number(entry.soloqCurrentScore)) && Number.isFinite(Number(entry.soloqCurrentLp))) {
+      const derived = getQueueStandingScore(entry.soloqTier, entry.soloqRank, Number(entry.soloqCurrentLp));
+      entry.soloqCurrentScore = Number.isFinite(derived) ? derived : null;
+    }
+    if (!Number.isFinite(Number(entry.flexStartScore)) && Number.isFinite(flexScore)) {
+      entry.flexCurrentLp = Number.isFinite(flexLp) ? flexLp : entry.flexCurrentLp;
+      const knownFlexDelta = Number(entry.flexDeltaLp);
+      entry.flexStartScore = flexScore - (Number.isFinite(knownFlexDelta) ? knownFlexDelta : 0);
+      entry.flexCurrentScore = flexScore;
+    }
+    if (!Number.isFinite(Number(entry.flexCurrentScore)) && Number.isFinite(Number(entry.flexCurrentLp))) {
+      const derived = getQueueStandingScore(entry.flexTier, entry.flexRank, Number(entry.flexCurrentLp));
+      entry.flexCurrentScore = Number.isFinite(derived) ? derived : null;
+    }
+
+    if (Number.isFinite(soloLp) && Number.isFinite(soloScore)) {
       if (entry.soloqStartLp === null) entry.soloqStartLp = soloLp;
-      const prevSolo = Number(playerSnapshot.soloqLp);
+      if (!Number.isFinite(Number(entry.soloqStartScore))) entry.soloqStartScore = soloScore;
+      if (!Number.isFinite(Number(playerSnapshot.soloqScore))) playerSnapshot.soloqScore = soloScore;
+      const prevSolo = Number(playerSnapshot.soloqScore);
       let stepSoloDelta = 0;
       if (Number.isFinite(prevSolo) && playerSnapshot.lastDateKey === todayKey) {
-        const rawStepSoloDelta = soloLp - prevSolo;
+        const rawStepSoloDelta = soloScore - prevSolo;
         if (isAnomalousLpStep(rawStepSoloDelta, playerSnapshot.lastSeenAt, nowIso)) {
           // Rebase when the delta is implausibly large for the elapsed time.
           entry.soloqStartLp = soloLp;
           entry.soloqCurrentLp = soloLp;
+          entry.soloqStartScore = soloScore;
+          entry.soloqCurrentScore = soloScore;
           entry.soloqLastDeltaLp = 0;
           entry.soloqBestSingleGainLp = 0;
         } else {
@@ -420,27 +501,35 @@ function updateDailyLpTracker(players) {
         entry.soloqBestSingleGainLp = stepSoloDelta;
       }
       entry.soloqCurrentLp = soloLp;
-      entry.soloqDeltaLp = Number.isFinite(entry.soloqStartLp)
-        ? (soloLp - entry.soloqStartLp)
+      entry.soloqCurrentScore = soloScore;
+      entry.soloqDeltaLp = Number.isFinite(Number(entry.soloqStartScore))
+        ? (soloScore - Number(entry.soloqStartScore))
         : 0;
       playerSnapshot.soloqLp = soloLp;
+      playerSnapshot.soloqScore = soloScore;
     }
 
-    if (Number.isFinite(flexLp)) {
+    if (Number.isFinite(flexLp) && Number.isFinite(flexScore)) {
       if (entry.flexStartLp === null) entry.flexStartLp = flexLp;
-      const prevFlex = Number(playerSnapshot.flexLp);
+      if (!Number.isFinite(Number(entry.flexStartScore))) entry.flexStartScore = flexScore;
+      if (!Number.isFinite(Number(playerSnapshot.flexScore))) playerSnapshot.flexScore = flexScore;
+      const prevFlex = Number(playerSnapshot.flexScore);
       if (Number.isFinite(prevFlex) && playerSnapshot.lastDateKey === todayKey) {
-        const rawStepFlexDelta = flexLp - prevFlex;
+        const rawStepFlexDelta = flexScore - prevFlex;
         if (isAnomalousLpStep(rawStepFlexDelta, playerSnapshot.lastSeenAt, nowIso)) {
           entry.flexStartLp = flexLp;
           entry.flexCurrentLp = flexLp;
+          entry.flexStartScore = flexScore;
+          entry.flexCurrentScore = flexScore;
         }
       }
       entry.flexCurrentLp = flexLp;
-      entry.flexDeltaLp = Number.isFinite(entry.flexStartLp)
-        ? (flexLp - entry.flexStartLp)
+      entry.flexCurrentScore = flexScore;
+      entry.flexDeltaLp = Number.isFinite(Number(entry.flexStartScore))
+        ? (flexScore - Number(entry.flexStartScore))
         : 0;
       playerSnapshot.flexLp = flexLp;
+      playerSnapshot.flexScore = flexScore;
     }
 
     entry.lastSeenAt = nowIso;
@@ -456,12 +545,85 @@ function updateDailyLpTracker(players) {
     const oldest = days.shift();
     delete ladderCache.dailyLpByDate[oldest];
   }
+
+  if (migratedLegacyRows) {
+    ladderCache.activityFeedSchemaVersion = ACTIVITY_FEED_SCHEMA_VERSION;
+  }
+}
+
+const QUEUE_TIER_ORDER = [
+  "IRON",
+  "BRONZE",
+  "SILVER",
+  "GOLD",
+  "PLATINUM",
+  "EMERALD",
+  "DIAMOND",
+  "MASTER",
+  "GRANDMASTER",
+  "CHALLENGER",
+];
+
+const QUEUE_DIVISION_INDEX = { IV: 0, III: 1, II: 2, I: 3 };
+
+function getQueueStandingScore(tier, rank, lp) {
+  const safeTier = String(tier || "").toUpperCase();
+  const safeRank = String(rank || "").toUpperCase();
+  const safeLp = Number(lp);
+  if (!safeTier || !Number.isFinite(safeLp)) return -1;
+  const tierIdx = QUEUE_TIER_ORDER.indexOf(safeTier);
+  if (tierIdx < 0) return -1;
+
+  const isApexTier = ["MASTER", "GRANDMASTER", "CHALLENGER"].includes(safeTier);
+  const divisionIdx = isApexTier ? 3 : (QUEUE_DIVISION_INDEX[safeRank] ?? 0);
+
+  // Unified ladder metric: each division step is exactly 100 points.
+  // Example: Plat II 90 -> Emerald III 90 = +300.
+  return ((tierIdx * 4) + divisionIdx) * 100 + safeLp;
+}
+
+function pickStandingWinner(currentBest, candidate, preferHigher) {
+  if (!currentBest) return candidate;
+  if (candidate.deltaLp !== currentBest.deltaLp) {
+    return preferHigher
+      ? (candidate.deltaLp > currentBest.deltaLp ? candidate : currentBest)
+      : (candidate.deltaLp < currentBest.deltaLp ? candidate : currentBest);
+  }
+
+  if (candidate.queueScore !== currentBest.queueScore) {
+    return preferHigher
+      ? (candidate.queueScore > currentBest.queueScore ? candidate : currentBest)
+      : (candidate.queueScore < currentBest.queueScore ? candidate : currentBest);
+  }
+
+  return candidate.currentLp > currentBest.currentLp ? candidate : currentBest;
 }
 
 function buildDailyHighlights() {
   const todayKey = getDateKey();
   const dailyMap = ladderCache.dailyLpByDate[todayKey] || {};
-  const entries = Object.values(dailyMap);
+  const entries = Object.entries(dailyMap);
+  const activityDeltaByPlayer = new Map();
+  for (const entry of ladderCache.activityFeedHistory || []) {
+    const entryDate = getDateKey(new Date(Number(entry?.gameEndTimestamp || Date.parse(String(entry?.updatedAt || "")) || Date.now())));
+    if (entryDate !== todayKey) continue;
+    const playerKey = String(entry?.player || "").toLowerCase();
+    if (!playerKey) continue;
+    const delta = Number(entry?.lpDelta);
+    if (!Number.isFinite(delta)) continue;
+    activityDeltaByPlayer.set(playerKey, (activityDeltaByPlayer.get(playerKey) || 0) + delta);
+  }
+  const activeSoloqPlayers = new Set(
+    (ladderCache.activityFeedHistory || [])
+      .filter((entry) => Number(entry?.lpDelta) !== 0)
+      .map((entry) => String(entry?.player || "").toLowerCase())
+      .filter(Boolean)
+  );
+  const playersByDailyKey = new Map(
+    (ladderCache.players || [])
+      .map((player) => [getDailyPlayerKey(player), player])
+      .filter(([key]) => Boolean(key))
+  );
 
   let bestSoloqGain = null;
   let bestFlexGain = null;
@@ -469,40 +631,86 @@ function buildDailyHighlights() {
   let bestOverallGain = null;
   let worstOverallLoss = null;
 
-  for (const row of entries) {
+  for (const [dailyKey, row] of entries) {
+    const playerFallback = playersByDailyKey.get(dailyKey) || null;
     let hasAnyQueue = false;
+    let hasAnyDeltaActivity = false;
     let totalDelta = 0;
+    let standingScore = -1;
 
-    if (Number.isFinite(row.soloqStartLp) && Number.isFinite(row.soloqCurrentLp)) {
-      const netDelta = row.soloqCurrentLp - row.soloqStartLp;
+    if (Number.isFinite(Number(row.soloqDeltaLp)) && Number.isFinite(row.soloqCurrentLp)) {
+      const playerActivityDelta = activityDeltaByPlayer.get(String(row.riotId || "").toLowerCase());
+      const netDelta = (Number(row.soloqDeltaLp) === 0 && Number.isFinite(playerActivityDelta))
+        ? Number(playerActivityDelta)
+        : Number(row.soloqDeltaLp);
+      const soloTier = row.soloqTier || playerFallback?.soloq?.tier || null;
+      const soloRank = row.soloqRank || playerFallback?.soloq?.rank || null;
+      const soloScore = getQueueStandingScore(soloTier, soloRank, row.soloqCurrentLp);
+      const hasSoloqActivity = Number(netDelta) !== 0
+        || Number(row.soloqBestSingleGainLp || 0) > 0
+        || activeSoloqPlayers.has(String(row.riotId || "").toLowerCase());
       hasAnyQueue = true;
+      if (Number(netDelta) !== 0) hasAnyDeltaActivity = true;
       totalDelta += netDelta;
-      if (netDelta > 0 && (!bestSoloqGain || netDelta > bestSoloqGain.deltaLp)) {
-        bestSoloqGain = { player: row.riotId, deltaLp: netDelta, currentLp: row.soloqCurrentLp };
-      }
-      if (netDelta < 0 && (!worstSoloqLoss || netDelta < worstSoloqLoss.deltaLp)) {
-        worstSoloqLoss = { player: row.riotId, deltaLp: netDelta, currentLp: row.soloqCurrentLp };
+      if (soloScore > standingScore) standingScore = soloScore;
+
+      if (hasSoloqActivity) {
+        bestSoloqGain = pickStandingWinner(bestSoloqGain, {
+          player: row.riotId,
+          deltaLp: netDelta,
+          currentLp: row.soloqCurrentLp,
+          queueScore: soloScore,
+        }, true);
+        worstSoloqLoss = pickStandingWinner(worstSoloqLoss, {
+          player: row.riotId,
+          deltaLp: netDelta,
+          currentLp: row.soloqCurrentLp,
+          queueScore: soloScore,
+        }, false);
       }
     }
 
-    if (Number.isFinite(row.flexStartLp) && Number.isFinite(row.flexCurrentLp)) {
-      const delta = row.flexCurrentLp - row.flexStartLp;
+    if (Number.isFinite(Number(row.flexDeltaLp)) && Number.isFinite(row.flexCurrentLp)) {
+      const delta = Number(row.flexDeltaLp);
+      const flexTier = row.flexTier || playerFallback?.flex?.tier || null;
+      const flexRank = row.flexRank || playerFallback?.flex?.rank || null;
+      const flexScore = getQueueStandingScore(flexTier, flexRank, row.flexCurrentLp);
       hasAnyQueue = true;
+      if (Number(delta) !== 0) hasAnyDeltaActivity = true;
       totalDelta += delta;
-      if (delta > 0 && (!bestFlexGain || delta > bestFlexGain.deltaLp)) {
-        bestFlexGain = { player: row.riotId, deltaLp: delta, currentLp: row.flexCurrentLp };
-      }
+      if (flexScore > standingScore) standingScore = flexScore;
+      bestFlexGain = pickStandingWinner(bestFlexGain, {
+        player: row.riotId,
+        deltaLp: delta,
+        currentLp: row.flexCurrentLp,
+        queueScore: flexScore,
+      }, true);
     }
 
-    if (hasAnyQueue) {
-      if (totalDelta > 0 && (!bestOverallGain || totalDelta > bestOverallGain.deltaLp)) {
-        bestOverallGain = { player: row.riotId, deltaLp: totalDelta };
-      }
-      if (totalDelta < 0 && (!worstOverallLoss || totalDelta < worstOverallLoss.deltaLp)) {
-        worstOverallLoss = { player: row.riotId, deltaLp: totalDelta };
-      }
+    if (hasAnyQueue && hasAnyDeltaActivity) {
+      bestOverallGain = pickStandingWinner(bestOverallGain, {
+        player: row.riotId,
+        deltaLp: totalDelta,
+        currentLp: Math.max(Number(row.soloqCurrentLp) || 0, Number(row.flexCurrentLp) || 0),
+        queueScore: standingScore,
+      }, true);
+      worstOverallLoss = pickStandingWinner(worstOverallLoss, {
+        player: row.riotId,
+        deltaLp: totalDelta,
+        currentLp: Math.max(Number(row.soloqCurrentLp) || 0, Number(row.flexCurrentLp) || 0),
+        queueScore: standingScore,
+      }, false);
     }
   }
+
+  // Business rule: winners must represent actual gains (> 0), never losses.
+  if (bestSoloqGain && Number(bestSoloqGain.deltaLp) <= 0) bestSoloqGain = null;
+  if (bestFlexGain && Number(bestFlexGain.deltaLp) <= 0) bestFlexGain = null;
+  if (bestOverallGain && Number(bestOverallGain.deltaLp) <= 0) bestOverallGain = null;
+
+  // Symmetric rule: losers must represent actual losses (< 0), never neutral/positive.
+  if (worstSoloqLoss && Number(worstSoloqLoss.deltaLp) >= 0) worstSoloqLoss = null;
+  if (worstOverallLoss && Number(worstOverallLoss.deltaLp) >= 0) worstOverallLoss = null;
 
   return {
     date: todayKey,
@@ -512,6 +720,165 @@ function buildDailyHighlights() {
     bestOverallGain,
     worstOverallLoss,
   };
+}
+
+function getDisplayNameFromRiotId(riotId) {
+  const safe = String(riotId || "").trim();
+  if (!safe) return "Jugador";
+  const [name] = safe.split("#");
+  return name || safe;
+}
+
+function buildActivityHistoryBootstrap(players = []) {
+  const bootstrap = [];
+  for (const player of players || []) {
+    const puuid = player?.puuid;
+    if (!puuid) continue;
+
+    const recentSoloq = (ladderCache.rankedMatchesByPuuid[puuid]?.matches || [])
+      .filter((m) => Number(m?.queueId) === 420)
+      .sort((a, b) => Number(b?.gameEndTimestamp || 0) - Number(a?.gameEndTimestamp || 0))
+      .slice(0, 3);
+
+    for (const match of recentSoloq) {
+      const hasKda = Number.isFinite(Number(match?.kills))
+        && Number.isFinite(Number(match?.deaths))
+        && Number.isFinite(Number(match?.assists));
+      const kda = hasKda
+        ? `${Math.trunc(Number(match.kills))}/${Math.trunc(Number(match.deaths))}/${Math.trunc(Number(match.assists))}`
+        : "s/d";
+      const playerName = getDisplayNameFromRiotId(player?.riotId);
+      const championName = match?.championName || "campeon";
+
+      bootstrap.push({
+        key: `${puuid}:${match?.id || match?.gameEndTimestamp || Date.now()}:0`,
+        player: player?.riotId || playerName,
+        puuid,
+        matchId: match?.id || null,
+        lpDelta: 0,
+        championName,
+        kda,
+        gameEndTimestamp: Number(match?.gameEndTimestamp || 0) || 0,
+        text: `${playerName} jugo con ${championName} quedando ${kda}`,
+        updatedAt: new Date(Number(match?.gameEndTimestamp || Date.now())).toISOString(),
+      });
+    }
+  }
+
+  return bootstrap
+    .sort((a, b) => Number(b?.gameEndTimestamp || 0) - Number(a?.gameEndTimestamp || 0))
+    .slice(0, ACTIVITY_FEED_HISTORY_LIMIT);
+}
+
+function appendActivityHistory(entries = []) {
+  const existing = Array.isArray(ladderCache.activityFeedHistory)
+    ? ladderCache.activityFeedHistory
+    : [];
+  const byKey = new Map(existing.map((e) => [String(e?.key || ""), e]));
+
+  for (const next of entries) {
+    const key = String(next?.key || "").trim();
+    if (!key) continue;
+    if (!byKey.has(key)) byKey.set(key, next);
+  }
+
+  ladderCache.activityFeedHistory = Array.from(byKey.values())
+    .sort((a, b) => Number(b?.gameEndTimestamp || 0) - Number(a?.gameEndTimestamp || 0))
+    .slice(0, ACTIVITY_FEED_HISTORY_LIMIT);
+}
+
+function refreshActivityFeedHistory(players = []) {
+  const todayKey = getDateKey();
+  const dailyMap = ladderCache.dailyLpByDate[todayKey] || {};
+  const incoming = [];
+
+  for (const player of players || []) {
+    const key = getDailyPlayerKey(player);
+    if (!key) continue;
+    const row = dailyMap[key];
+    if (!row) continue;
+
+    const stepDelta = Number(row?.soloqLastDeltaLp);
+    if (!Number.isFinite(stepDelta) || stepDelta === 0) continue;
+
+    const puuid = player?.puuid || row?.puuid || null;
+    const recentMatches = puuid ? (ladderCache.rankedMatchesByPuuid[puuid]?.matches || []) : [];
+    const latestSoloqMatch = recentMatches
+      .filter((m) => Number(m?.queueId) === 420)
+      .sort((a, b) => Number(b?.gameEndTimestamp || 0) - Number(a?.gameEndTimestamp || 0))[0] || null;
+
+    const playerName = getDisplayNameFromRiotId(row?.riotId || player?.riotId);
+    const championName = latestSoloqMatch?.championName || "campeon";
+    const hasKda = Number.isFinite(Number(latestSoloqMatch?.kills))
+      && Number.isFinite(Number(latestSoloqMatch?.deaths))
+      && Number.isFinite(Number(latestSoloqMatch?.assists));
+    const kda = hasKda
+      ? `${Math.trunc(Number(latestSoloqMatch.kills))}/${Math.trunc(Number(latestSoloqMatch.deaths))}/${Math.trunc(Number(latestSoloqMatch.assists))}`
+      : "s/d";
+    const lpAbs = Math.abs(Math.trunc(stepDelta));
+    const action = stepDelta < 0 ? "perdio" : "gano";
+    const matchId = latestSoloqMatch?.id || null;
+    const gameEndTimestamp = Number(latestSoloqMatch?.gameEndTimestamp || Date.parse(String(row?.lastSeenAt || "")) || Date.now());
+    const uniqueKey = `${puuid || key}:${matchId || gameEndTimestamp}:${stepDelta}`;
+
+    incoming.push({
+      key: uniqueKey,
+      player: row?.riotId || player?.riotId || playerName,
+      puuid,
+      matchId,
+      lpDelta: stepDelta,
+      championName,
+      kda,
+      gameEndTimestamp,
+      text: `${playerName} ${action} ${lpAbs}lp con ${championName} quedando ${kda}`,
+      updatedAt: row?.lastSeenAt || new Date().toISOString(),
+    });
+  }
+
+  if (incoming.length > 0) {
+    appendActivityHistory(incoming);
+    return;
+  }
+
+  if (!Array.isArray(ladderCache.activityFeedHistory) || ladderCache.activityFeedHistory.length === 0) {
+    ladderCache.activityFeedHistory = buildActivityHistoryBootstrap(players);
+  }
+}
+
+function buildDetailedActivityFeed() {
+  const feed = Array.isArray(ladderCache.activityFeedHistory)
+    ? ladderCache.activityFeedHistory
+    : [];
+  return feed
+    .slice()
+    .sort((a, b) => Number(b?.gameEndTimestamp || 0) - Number(a?.gameEndTimestamp || 0))
+    .slice(0, ACTIVITY_FEED_HISTORY_LIMIT);
+}
+
+function patchLegacyActivityEntry(entry) {
+  const patched = { ...entry };
+  const text = String(patched?.text || "").replace(/\s+/g, " ").trim().replace(/\s*p\.j\.$/i, "").trim();
+  patched.text = text;
+
+  const parsedDelta = /\b(gano|perdio)\s+(\d+)\s*lp\b/i.exec(text || "");
+  if (parsedDelta) {
+    const action = String(parsedDelta[1] || "").toLowerCase();
+    const amount = Number(parsedDelta[2]);
+    if (Number.isFinite(amount)) {
+      patched.lpDelta = action === "perdio" ? -amount : amount;
+    }
+  } else if (!Number.isFinite(Number(patched.lpDelta))) {
+    patched.lpDelta = 0;
+  }
+
+  return patched;
+}
+
+function patchLegacyActivityFeedHistory(history = []) {
+  const safeHistory = Array.isArray(history) ? history : [];
+  return safeHistory
+    .map((entry) => patchLegacyActivityEntry(entry))
+    .slice(0, ACTIVITY_FEED_HISTORY_LIMIT);
 }
 
 function getFriendCacheKey(friend) {
@@ -542,6 +909,10 @@ function saveCacheToFile() {
         rankedMatchesByPuuid: ladderCache.rankedMatchesByPuuid,
         playerSnapshotByKey: ladderCache.playerSnapshotByKey,
         rawDataByPuuid: ladderCache.rawDataByPuuid,
+        dailyLpByDate: ladderCache.dailyLpByDate,
+        lpSnapshotByPlayer: ladderCache.lpSnapshotByPlayer,
+        activityFeedHistory: ladderCache.activityFeedHistory,
+        activityFeedSchemaVersion: ladderCache.activityFeedSchemaVersion,
         refreshCursor: ladderCache.refreshCursor,
         lastUpdatedAt: ladderCache.lastUpdatedAt,
         lastError: ladderCache.lastError,
@@ -560,10 +931,30 @@ function loadCacheFromFile() {
       ladderCache.rankedMatchesByPuuid = cached.rankedMatchesByPuuid || {};
       ladderCache.playerSnapshotByKey = cached.playerSnapshotByKey || {};
       ladderCache.rawDataByPuuid = cached.rawDataByPuuid || {};
-      // Activity should be live-session based to avoid stale or corrupted daily deltas
-      // from previous process runs.
-      ladderCache.dailyLpByDate = {};
-      ladderCache.lpSnapshotByPlayer = {};
+      ladderCache.dailyLpByDate = cached.dailyLpByDate || {};
+      ladderCache.lpSnapshotByPlayer = cached.lpSnapshotByPlayer || {};
+      ladderCache.activityFeedSchemaVersion = Number(cached.activityFeedSchemaVersion || 1);
+      ladderCache.activityFeedHistory = Array.isArray(cached.activityFeedHistory)
+        ? cached.activityFeedHistory.slice(0, ACTIVITY_FEED_HISTORY_LIMIT)
+        : [];
+
+      // Keep only the last 14 days in-memory and on-disk.
+      const validDays = Object.keys(ladderCache.dailyLpByDate || {}).sort().slice(-14);
+      const compactDaily = {};
+      for (const day of validDays) {
+        compactDaily[day] = ladderCache.dailyLpByDate[day];
+      }
+      ladderCache.dailyLpByDate = compactDaily;
+      if (ladderCache.activityFeedSchemaVersion < ACTIVITY_FEED_SCHEMA_VERSION) {
+        ladderCache.activityFeedHistory = patchLegacyActivityFeedHistory(ladderCache.activityFeedHistory);
+        if (ladderCache.activityFeedHistory.length === 0) {
+          ladderCache.activityFeedHistory = buildActivityHistoryBootstrap(ladderCache.players);
+        }
+        ladderCache.activityFeedSchemaVersion = ACTIVITY_FEED_SCHEMA_VERSION;
+      } else if (ladderCache.activityFeedHistory.length === 0) {
+        ladderCache.activityFeedHistory = buildActivityHistoryBootstrap(ladderCache.players);
+      }
+
       ladderCache.refreshCursor = Number(cached.refreshCursor) || 0;
       ladderCache.lastUpdatedAt = cached.lastUpdatedAt || null;
       ladderCache.lastError = cached.lastError || null;
@@ -1109,6 +1500,7 @@ async function refreshLadderCache(forceFull = false) {
     ladderCache.players = players;
     pruneRankedMatchesCacheForActivePuuids(players.map((p) => p?.puuid).filter(Boolean));
     updateDailyLpTracker(players);
+    refreshActivityFeedHistory(players);
     ladderCache.lastUpdatedAt = new Date().toISOString();
     ladderCache.lastError = null;
     try {
@@ -1327,6 +1719,30 @@ app.get("/api/status", (req, res) => {
   });
 });
 
+// GET /api/activity-feed — actividad diaria en formato textual desglosado
+app.get("/api/activity-feed", async (req, res) => {
+  if (!RIOT_API_KEY) {
+    return res.status(500).json({ error: "Falta RIOT_API_KEY en server/.env" });
+  }
+
+  try {
+    if (ladderCache.refreshPromise) {
+      await ladderCache.refreshPromise;
+    } else if (!ladderCache.lastUpdatedAt) {
+      await refreshLadderCache();
+    }
+
+    const entries = buildDetailedActivityFeed();
+    return res.json({
+      date: getDateKey(),
+      updatedAt: ladderCache.lastUpdatedAt,
+      entries,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/force-refresh — fuerza refresco inmediato de todos los jugadores
 app.post("/api/force-refresh", async (req, res) => {
   if (!RIOT_API_KEY) return res.status(500).json({ error: "Sin RIOT_API_KEY" });
@@ -1377,7 +1793,10 @@ if (RIOT_API_KEY) {
       console.error("ERROR on first refresh:", error.message);
     });
   } else {
-    console.log("Using cached ladder snapshot from disk. Background refresh will run on schedule.");
+    console.log("Using cached ladder snapshot from disk. Triggering startup background refresh.");
+    refreshLadderCache().catch((error) => {
+      console.error("ERROR on startup background refresh:", error.message);
+    });
   }
 }
 
