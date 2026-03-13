@@ -15,10 +15,21 @@ const Squares = ({
   const numSquaresY = useRef();
   const gridOffset = useRef({ x: 0, y: 0 });
   const hoveredSquare = useRef(null);
+  const isVisibleRef = useRef(true);
+  const isScrollingRef = useRef(false);
+  const scrollTimeoutRef = useRef(null);
+  const lastFrameTimeRef = useRef(0);
 
   useEffect(() => {
     const canvas = canvasRef.current;
+    if (!canvas) return undefined;
     const ctx = canvas.getContext('2d');
+    if (!ctx) return undefined;
+
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const isCoarsePointer = window.matchMedia('(pointer: coarse)').matches;
+    const shouldAnimate = !(prefersReducedMotion || isCoarsePointer);
+    const targetFrameMs = 1000 / 30;
 
     const resizeCanvas = () => {
       canvas.width = canvas.offsetWidth;
@@ -69,7 +80,24 @@ const Squares = ({
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     };
 
-    const updateAnimation = () => {
+    const updateAnimation = timestamp => {
+      if (!isVisibleRef.current) {
+        requestRef.current = requestAnimationFrame(updateAnimation);
+        return;
+      }
+
+      if (isScrollingRef.current) {
+        requestRef.current = requestAnimationFrame(updateAnimation);
+        return;
+      }
+
+      const elapsed = timestamp - lastFrameTimeRef.current;
+      if (elapsed < targetFrameMs) {
+        requestRef.current = requestAnimationFrame(updateAnimation);
+        return;
+      }
+      lastFrameTimeRef.current = timestamp;
+
       const effectiveSpeed = Math.max(speed, 0.1);
       switch (direction) {
         case 'right':
@@ -96,6 +124,18 @@ const Squares = ({
       requestRef.current = requestAnimationFrame(updateAnimation);
     };
 
+    const handleVisibilityChange = () => {
+      isVisibleRef.current = !document.hidden;
+    };
+
+    const handleScroll = () => {
+      isScrollingRef.current = true;
+      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+      scrollTimeoutRef.current = setTimeout(() => {
+        isScrollingRef.current = false;
+      }, 120);
+    };
+
     const handleMouseMove = event => {
       const rect = canvas.getBoundingClientRect();
       const mouseX = event.clientX - rect.left;
@@ -120,16 +160,29 @@ const Squares = ({
       hoveredSquare.current = null;
     };
 
-    canvas.addEventListener('mousemove', handleMouseMove);
-    canvas.addEventListener('mouseleave', handleMouseLeave);
+    if (!isCoarsePointer) {
+      canvas.addEventListener('mousemove', handleMouseMove);
+      canvas.addEventListener('mouseleave', handleMouseLeave);
+    }
 
-    requestRef.current = requestAnimationFrame(updateAnimation);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('scroll', handleScroll, { passive: true });
+
+    drawGrid();
+    if (shouldAnimate) {
+      requestRef.current = requestAnimationFrame(updateAnimation);
+    }
 
     return () => {
       window.removeEventListener('resize', resizeCanvas);
-      cancelAnimationFrame(requestRef.current);
-      canvas.removeEventListener('mousemove', handleMouseMove);
-      canvas.removeEventListener('mouseleave', handleMouseLeave);
+      window.removeEventListener('scroll', handleScroll);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+      if (requestRef.current) cancelAnimationFrame(requestRef.current);
+      if (!isCoarsePointer) {
+        canvas.removeEventListener('mousemove', handleMouseMove);
+        canvas.removeEventListener('mouseleave', handleMouseLeave);
+      }
     };
   }, [direction, speed, borderColor, hoverFillColor, squareSize]);
 

@@ -1,8 +1,8 @@
 .fc {
   position: relative;
   width: 100%;
-  height: 300px;
-  margin-top: 400px;
+  height: clamp(200px, 32vw, 300px);
+  margin-top: clamp(20px, 7vw, 110px);
   overflow: hidden;
   background: #05101e;
   flex-shrink: 0;
@@ -100,4 +100,41 @@
 .fc__dot:hover:not(.fc__dot--active) {
   background: rgba(93, 173, 226, 0.4);
   transform: none;
+}
+
+@media (max-width: 900px) {
+  .fc {
+    height: 230px;
+    margin-top: 36px;
+  }
+}
+
+@media (max-width: 640px) {
+  .fc {
+    height: 180px;
+    margin-top: 22px;
+  }
+
+  .fc__arrow {
+    width: 40px;
+    height: 40px;
+    font-size: 24px;
+  }
+
+  .fc__arrow--prev { left: 10px; }
+  .fc__arrow--next { right: 10px; }
+
+  .fc__dots {
+    bottom: 12px;
+    gap: 6px;
+  }
+
+  .fc__dot {
+    width: 7px;
+    height: 7px;
+  }
+
+  .fc__dot--active {
+    width: 18px;
+  }
 }

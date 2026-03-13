@@ -21,14 +21,16 @@ body {
   font-family: "Trebuchet MS", "Segoe UI", sans-serif;
   color: var(--text);
   min-height: 100vh;
+  overflow-x: hidden;
   background: linear-gradient(135deg, #0f0419 0%, #1a0a2e 50%, #16213e 100%);
-  background-attachment: fixed;
+  background-attachment: scroll;
 }
 
 #root {
   min-height: 100vh;
   position: relative;
   z-index: 10;
+  overflow-x: clip;
 }
 
 .page-content {
@@ -45,8 +47,8 @@ body {
   width: min(1680px, calc(100vw - 36px));
   margin: 0 auto;
   background: rgba(30, 41, 55, 0.7);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   border: 1px solid rgba(138, 43, 226, 0.25);
   border-radius: 12px;
   box-shadow: var(--shadow);
@@ -127,6 +129,8 @@ h1 {
   border: 1px solid rgba(160, 213, 255, 0.28);
   background: rgba(10, 22, 40, 0.8);
   box-shadow: 0 8px 16px rgba(0, 0, 0, 0.28);
+  content-visibility: auto;
+  contain-intrinsic-size: 320px;
 }
 
 .summoner-tile__img {
@@ -638,7 +642,7 @@ button:disabled {
     rgba(6, 20, 40, 0.72);
   border: 1px solid rgba(109, 194, 255, 0.28);
   border-radius: 16px;
-  backdrop-filter: blur(12px);
+  backdrop-filter: blur(6px);
 }
 
 .activity-section__header {
@@ -755,7 +759,7 @@ button:disabled {
   border: 1px solid rgba(138, 43, 226, 0.4);
   border-radius: 10px;
   text-align: center;
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(3px);
 }
 
 .activity-label {
@@ -922,6 +926,11 @@ button:disabled {
   align-items: center;
 }
 
+.rank-search {
+  flex: 1 1 260px;
+  min-width: 220px;
+}
+
 .rank-search input {
   border: 1px solid rgba(138, 43, 226, 0.25);
   border-radius: 10px;
@@ -1077,6 +1086,8 @@ button:disabled {
   border-bottom: 1px solid rgba(114, 177, 255, 0.2);
   transition: background 0.24s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.24s cubic-bezier(0.22, 1, 0.36, 1);
   border-left: 3px solid var(--tier-color, var(--line));
+  content-visibility: auto;
+  contain-intrinsic-size: 110px;
 }
 
 .player-regular {
@@ -1478,6 +1489,7 @@ button:disabled {
   align-items: flex-start;
   gap: 4px;
   min-width: 300px;
+  max-width: 100%;
 }
 
 .queue-understat {
@@ -1652,6 +1664,13 @@ button:disabled {
 }
 
 @media (max-width: 900px) {
+  .container,
+  .activity-section,
+  .activity-card {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
   .panel-section--masonry {
     min-height: calc(100vh - 160px);
   }
@@ -1706,19 +1725,26 @@ button:disabled {
     grid-template-columns: 38px 1fr 200px 180px;
   }
 
+  .queue-badge-stack {
+    min-width: 0;
+    width: 100%;
+  }
+
   .rank-badge-compact {
     min-height: 58px;
-    width: 250px;
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: 52px 72px minmax(0, 1fr);
   }
 
   .rank-icon {
-    width: 82px;
-    height: 82px;
+    width: 72px;
+    height: 72px;
   }
 
   .rank-icon-slot {
-    width: 82px;
-    min-height: 82px;
+    width: 72px;
+    min-height: 72px;
   }
 
   .rank-text {
@@ -1737,7 +1763,7 @@ button:disabled {
   }
 
   .player-rank-badges {
-    width: auto;
+    width: 100%;
   }
 
   .player-warns {
@@ -1753,12 +1779,19 @@ button:disabled {
   }
 
   .rank-topbar {
-    grid-template-columns: 1fr;
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .rank-controls {
-    flex-direction: row;
-    align-items: center;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .role-pills {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 4px;
   }
 
   .rank-search input {
@@ -1767,6 +1800,10 @@ button:disabled {
 }
 
 @media (max-width: 640px) {
+  .page-content {
+    padding-top: 74px;
+  }
+
   .panel-section--masonry {
     min-height: calc(100vh - 140px);
   }
@@ -1826,11 +1863,31 @@ button:disabled {
   .duel-center-elo {
     position: static;
     transform: none;
-    justify-self: center;
+    justify-self: stretch;
+    justify-content: space-between;
+    width: 100%;
+    gap: 8px;
+    padding: 8px 10px;
     margin: 4px 0;
   }
 
+  .duel-center-side {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .duel-center-rank {
+    font-size: 11px;
+  }
+
+  .duel-center-lp {
+    font-size: clamp(1.1rem, 6vw, 1.35rem);
+  }
+
   .duel-vs {
+    width: 38px;
+    height: 38px;
+    font-size: 11px;
     justify-self: center;
   }
 
@@ -1878,7 +1935,7 @@ button:disabled {
 
   .container {
     width: 100%;
-    padding: 16px;
+    padding: 14px;
     border-radius: 16px;
   }
 
@@ -2124,9 +2181,60 @@ button:disabled {
     padding: 8px 8px 8px 10px;
   }
 
-  .rank-col-header__warns,
-  .player-row .player-warns {
+  .rank-col-header {
     display: none;
+  }
+
+  .player-row {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    min-height: 0;
+    padding: 12px;
+  }
+
+  .player-row .pos {
+    align-self: flex-start;
+    width: 34px;
+    height: 34px;
+    font-size: 14px;
+  }
+
+  .player-main,
+  .player-rank,
+  .player-warns,
+  .player-row .champ-icons,
+  .player-row .role-cell {
+    width: 100%;
+  }
+
+  .player-row .role-cell {
+    justify-content: flex-start;
+  }
+
+  .icon {
+    width: 52px;
+    height: 52px;
+  }
+
+  .riot-id {
+    font-size: 16px;
+  }
+
+  .riot-alts {
+    max-width: 100%;
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  .rank-col-header__warns {
+    display: none;
+  }
+
+  .player-row .player-warns {
+    display: flex;
+    min-height: 0;
   }
 
   .rank-col-header__player,
@@ -2135,33 +2243,34 @@ button:disabled {
   }
 
   .rank-badge-compact {
-    min-height: 54px;
-    width: 228px;
-    grid-template-columns: 56px 78px minmax(0, 1fr);
-    column-gap: 10px;
+    min-height: 50px;
+    width: 100%;
+    grid-template-columns: 50px 58px minmax(0, 1fr);
+    column-gap: 8px;
   }
 
   .rank-icon {
-    width: 78px;
-    height: 78px;
+    width: 58px;
+    height: 58px;
   }
 
   .rank-icon-slot {
-    width: 78px;
-    min-height: 78px;
+    width: 58px;
+    min-height: 58px;
   }
 
   .queue-label {
-    width: 56px;
-    min-width: 56px;
+    width: 50px;
+    min-width: 50px;
+    font-size: 9px;
   }
 
   .rank-text {
-    font-size: 16px;
+    font-size: 13px;
   }
 
   .rank-lp {
-    font-size: 15px;
+    font-size: 12px;
   }
 
   .player-top-1 {
@@ -2178,6 +2287,19 @@ button:disabled {
 
   .player-rank {
     margin-left: 0;
+  }
+
+  .player-rank-badges {
+    gap: 8px;
+  }
+
+  .queue-badge-stack {
+    min-width: 0;
+  }
+
+  .queue-understat {
+    padding-left: 0;
+    font-size: 11px;
   }
 
   .warn-pill {
@@ -2204,9 +2326,8 @@ button:disabled {
   }
 
   .rank-topbar {
-    grid-template-columns: 1fr;
     gap: 12px;
-    padding: 14px 16px;
+    padding: 12px;
   }
 
   .rank-controls {
@@ -2216,5 +2337,37 @@ button:disabled {
 
   .rank-search input {
     width: 100%;
+  }
+}
+
+@media (max-width: 420px) {
+  .app {
+    padding: 8px;
+  }
+
+  .container {
+    padding: 12px;
+  }
+
+  .duel-icon {
+    width: 84px;
+    height: 84px;
+  }
+
+  .duel-name {
+    font-size: 16px;
+    max-width: 170px;
+  }
+
+  .activity-meta-pill {
+    font-size: 11px;
+    padding: 3px 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-in-out,
+  .player-top::before {
+    animation: none !important;
   }
 }
