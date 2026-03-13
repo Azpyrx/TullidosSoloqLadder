@@ -1122,7 +1122,9 @@ button:disabled {
 .role-pills {
   display: flex;
   flex-wrap: wrap;
+  flex: 1 1 auto;
   gap: 6px;
+  width: 100%;
 }
 
 .role-pill {
@@ -1263,13 +1265,14 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 30px;
-  padding: 0 12px;
+  margin-left: auto;
+  min-height: 40px;
+  padding: 0 14px;
   border-radius: 999px;
   border: 1px solid rgba(183, 233, 255, 0.42);
   background: linear-gradient(135deg, rgba(20, 58, 102, 0.95), rgba(29, 98, 130, 0.9));
   color: #f3fbff;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;

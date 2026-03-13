@@ -1382,23 +1382,15 @@ export default function App() {
               className={`rank-mode-switch ${rankingMode === "all" ? "is-all" : "is-combined"}`}
               role="switch"
               aria-checked={rankingMode === "all"}
-              aria-label="Cambiar modo de ranking entre Combinado y Todos"
-              title={rankingMode === "all" ? "Modo actual: Todos" : "Modo actual: Combinado"}
+              aria-label="Cambiar modo de ranking entre Combinado y Todas las cuentas"
+              title={rankingMode === "all" ? "Modo actual: Todas las cuentas" : "Modo actual: Combinado"}
               onClick={() => setRankingMode((prev) => (prev === "combined" ? "all" : "combined"))}
             >
               <span className="rank-mode-label">Combinado</span>
               <span className="rank-mode-track" aria-hidden="true">
                 <span className="rank-mode-thumb" />
               </span>
-              <span className="rank-mode-label">Todos</span>
-            </button>
-            <button
-              type="button"
-              className="rank-users-shortcut"
-              onClick={() => setActiveTab("users")}
-              title="Ir a usuarios"
-            >
-              Usuarios
+              <span className="rank-mode-label">Todas las cuentas</span>
             </button>
             {["ALL", "TOP", "JUNGLE", "MID", "BOTTOM", "UTILITY"].map((role) => (
               <button
@@ -1419,6 +1411,14 @@ export default function App() {
                 )}
               </button>
             ))}
+            <button
+              type="button"
+              className="rank-users-shortcut"
+              onClick={() => setActiveTab("users")}
+              title="Ir a usuarios"
+            >
+              Usuarios
+            </button>
           </div>
         </div>
       </div>
