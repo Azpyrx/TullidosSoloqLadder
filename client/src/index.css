@@ -79,6 +79,13 @@ h1 {
   color: var(--muted);
 }
 
+.info-label {
+  display: block;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-align: left;
+}
+
 .panel-section {
   border: 1px solid rgba(138, 43, 226, 0.25);
   border-radius: 18px;
@@ -302,14 +309,26 @@ button:disabled {
 
 .user-card,
 .info-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: 168px minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   padding: 14px;
   border: 1px solid rgba(138, 43, 226, 0.25);
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.74);
+}
+
+.user-card {
+  display: flex;
+  justify-content: space-between;
+}
+
+.info-item strong {
+  justify-self: end;
+  text-align: right;
+  min-width: 0;
+  word-break: break-word;
 }
 
 .user-meta {
@@ -981,9 +1000,13 @@ button:disabled {
 }
 
 /* -- Column header -- */
+.rank-col-header,
+.player-row {
+  grid-template-columns: 50px minmax(260px, 1.2fr) 150px 72px minmax(700px, 2.2fr) minmax(220px, 0.9fr);
+}
+
 .rank-col-header {
   display: grid;
-  grid-template-columns: 50px minmax(260px, 1.2fr) 150px 72px minmax(560px, 1.85fr) minmax(220px, 0.9fr);
   gap: 12px;
   padding: 8px 7px;
   margin-bottom: 8px;
@@ -1004,26 +1027,31 @@ button:disabled {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
 }
 
-.rank-col-header span:nth-child(1) {
+.rank-col-header__pos {
   justify-self: center;
 }
 
-.rank-col-header span:nth-child(2),
-.rank-col-header span:nth-child(3) {
+.rank-col-header__player,
+.rank-col-header__champs,
+.rank-col-header__elo,
+.rank-col-header__warns {
   justify-self: start;
 }
 
-.rank-col-header span:nth-child(4) {
+.rank-col-header__player {
+  padding-left: 78px;
+}
+
+.rank-col-header__champs {
+  padding-left: 0;
+}
+
+.rank-col-header__role {
   justify-self: center;
 }
 
-.rank-col-header span:nth-child(5) {
-  justify-self: start;
-  margin-left: 0;
-}
-
-.rank-col-header span:nth-child(6) {
-  justify-self: start;
+.rank-col-header__elo {
+  padding-left: 0;
 }
 
 /* -- Player row (updated) -- */
@@ -1041,7 +1069,6 @@ button:disabled {
 
 .player-row {
   display: grid;
-  grid-template-columns: 50px minmax(260px, 1.2fr) 150px 72px minmax(700px, 2.2fr) minmax(220px, 0.9fr);
   gap: 12px;
   align-items: center;
   padding: 2px 7px;
@@ -1499,9 +1526,10 @@ button:disabled {
 }
 
 .rank-badge-compact {
-  display: flex;
+  display: grid;
+  grid-template-columns: 60px 88px minmax(0, 1fr);
   align-items: center;
-  gap: 12px;
+  column-gap: 12px;
   min-height: 68px;
   padding: 6px 8px 4px;
   border-radius: 0;
@@ -1521,8 +1549,9 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  grid-column: 1;
   height: 22px;
-  min-width: 52px;
+  width: 60px;
   padding: 0 8px;
   border-radius: 999px;
   border: 1px solid rgba(114, 177, 255, 0.34);
@@ -1534,15 +1563,26 @@ button:disabled {
   flex-shrink: 0;
 }
 
+.rank-icon-slot {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 88px;
+  min-height: 88px;
+}
+
 .rank-icon {
   width: 88px;
   height: 88px;
   object-fit: contain;
   flex-shrink: 0;
   filter: none;
+  justify-self: center;
 }
 
 .rank-info {
+  grid-column: 3;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
@@ -1676,6 +1716,11 @@ button:disabled {
     height: 82px;
   }
 
+  .rank-icon-slot {
+    width: 82px;
+    min-height: 82px;
+  }
+
   .rank-text {
     font-size: 17px;
   }
@@ -1700,8 +1745,8 @@ button:disabled {
     max-width: 100%;
   }
 
-  .rank-col-header span:nth-child(3),
-  .rank-col-header span:nth-child(4),
+  .rank-col-header__champs,
+  .rank-col-header__role,
   .player-row .champ-icons,
   .player-row .role-cell {
     display: none;
@@ -2079,19 +2124,36 @@ button:disabled {
     padding: 8px 8px 8px 10px;
   }
 
-  .rank-col-header span:nth-child(6),
+  .rank-col-header__warns,
   .player-row .player-warns {
     display: none;
+  }
+
+  .rank-col-header__player,
+  .rank-col-header__elo {
+    padding-left: 0;
   }
 
   .rank-badge-compact {
     min-height: 54px;
     width: 228px;
+    grid-template-columns: 56px 78px minmax(0, 1fr);
+    column-gap: 10px;
   }
 
   .rank-icon {
     width: 78px;
     height: 78px;
+  }
+
+  .rank-icon-slot {
+    width: 78px;
+    min-height: 78px;
+  }
+
+  .queue-label {
+    width: 56px;
+    min-width: 56px;
   }
 
   .rank-text {
@@ -2125,10 +2187,20 @@ button:disabled {
   }
 
   .user-card,
-  .info-item,
   .section-heading {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .info-item {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    align-items: flex-start;
+  }
+
+  .info-item strong {
+    justify-self: start;
+    text-align: left;
   }
 
   .rank-topbar {

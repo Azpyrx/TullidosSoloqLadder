@@ -57,9 +57,11 @@ function RankBadge({ rankData, queueLabel }) {
   return (
     <div className={`rank-badge-compact ${isRanked ? "" : "is-unranked"}`} title={title}>
       <span className="queue-label">{queueLabel}</span>
-      {iconUrl && (
-        <img src={iconUrl} alt={rankData.tier} className="rank-icon" onError={(e) => { e.target.style.display = "none"; }} />
-      )}
+      <span className="rank-icon-slot" aria-hidden="true">
+        {iconUrl && (
+          <img src={iconUrl} alt={rankData.tier} className="rank-icon" onError={(e) => { e.target.style.display = "none"; }} />
+        )}
+      </span>
       <div className="rank-info">
         <span className="rank-text">{tierLabel}</span>
         {isRanked && <span className="rank-division">{rankData.rank}</span>}
@@ -336,6 +338,12 @@ function formatSignedLps(delta) {
   const abs = Math.abs(Math.trunc(safe));
   const sign = safe >= 0 ? "+" : "-";
   return `${sign}${abs} LPs`;
+}
+
+function formatLossLps(delta) {
+  const safe = Number(delta);
+  if (!Number.isFinite(safe)) return "0 LPs";
+  return `-${Math.abs(Math.trunc(safe))} LPs`;
 }
 
 function formatQueueSummary(queue) {
@@ -863,8 +871,8 @@ export default function App() {
           <div className="activity-card activity-card--loser">
             <span className="activity-label">Perdedor LPs hoy (global)</span>
             <span className="activity-value">{worstOverallToday?.player || worstSoloToday?.player || "—"}</span>
-            <span className="activity-delta-hero activity-delta-hero--down">{formatSignedLps(worstOverallToday?.deltaLp ?? worstSoloToday?.deltaLp ?? 0)}</span>
-            <span className="activity-detail">{formatLpDelta(worstOverallToday?.deltaLp ?? worstSoloToday?.deltaLp ?? 0)}</span>
+            <span className="activity-delta-hero activity-delta-hero--down">{formatLossLps(worstOverallToday?.deltaLp ?? worstSoloToday?.deltaLp ?? 0)}</span>
+            <span className="activity-detail">{formatLpDelta(-Math.abs(Number(worstOverallToday?.deltaLp ?? worstSoloToday?.deltaLp ?? 0) || 0))}</span>
           </div>
         </div>
       </div>
@@ -908,12 +916,12 @@ export default function App() {
       ) : (
         <>
           <div className="rank-col-header">
-            <span>#</span>
-            <span>JUGADOR</span>
-            <span>TOP CHAMPS</span>
-            <span>ROL</span>
-            <span>ELO</span>
-            <span>SENALES</span>
+            <span className="rank-col-header__pos">#</span>
+            <span className="rank-col-header__player">JUGADOR</span>
+            <span className="rank-col-header__champs">TOP CHAMPS</span>
+            <span className="rank-col-header__role">ROL</span>
+            <span className="rank-col-header__elo">ELO</span>
+            <span className="rank-col-header__warns">SENALES</span>
           </div>
 
           {filteredPlayers.length === 0 ? (

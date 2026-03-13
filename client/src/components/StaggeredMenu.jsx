@@ -59,7 +59,7 @@ export const StaggeredMenu = ({
       preLayerElsRef.current = preLayers;
 
       const offscreen = position === 'left' ? -100 : 100;
-      gsap.set([panel, ...preLayers], { xPercent: offscreen });
+      gsap.set([panel, ...preLayers], { xPercent: offscreen, force3D: true });
       gsap.set(plusH, { transformOrigin: '50% 50%', rotate: 0 });
       gsap.set(plusV, { transformOrigin: '50% 50%', rotate: 90 });
       gsap.set(icon, { rotate: 0, transformOrigin: '50% 50%' });
@@ -89,28 +89,28 @@ export const StaggeredMenu = ({
     const layerStates = layers.map(el => ({ el, start: Number(gsap.getProperty(el, 'xPercent')) }));
     const panelStart = Number(gsap.getProperty(panel, 'xPercent'));
 
-    if (itemEls.length) gsap.set(itemEls, { yPercent: 140, rotate: 10 });
+    if (itemEls.length) gsap.set(itemEls, { yPercent: 140, rotate: 10, force3D: true });
     if (numberEls.length) gsap.set(numberEls, { '--sm-num-opacity': 0 });
     if (socialTitle) gsap.set(socialTitle, { opacity: 0 });
-    if (socialLinks.length) gsap.set(socialLinks, { y: 25, opacity: 0 });
+    if (socialLinks.length) gsap.set(socialLinks, { y: 25, opacity: 0, force3D: true });
 
     const tl = gsap.timeline({ paused: true });
 
     layerStates.forEach((ls, i) => {
-      tl.fromTo(ls.el, { xPercent: ls.start }, { xPercent: 0, duration: 0.5, ease: 'power4.out' }, i * 0.07);
+      tl.fromTo(ls.el, { xPercent: ls.start }, { xPercent: 0, duration: 0.42, ease: 'power3.out', force3D: true }, i * 0.055);
     });
-    const lastTime = layerStates.length ? (layerStates.length - 1) * 0.07 : 0;
-    const panelInsertTime = lastTime + (layerStates.length ? 0.08 : 0);
-    const panelDuration = 0.65;
+    const lastTime = layerStates.length ? (layerStates.length - 1) * 0.055 : 0;
+    const panelInsertTime = lastTime + (layerStates.length ? 0.06 : 0);
+    const panelDuration = 0.5;
 
-    tl.fromTo(panel, { xPercent: panelStart }, { xPercent: 0, duration: panelDuration, ease: 'power4.out' }, panelInsertTime);
+    tl.fromTo(panel, { xPercent: panelStart }, { xPercent: 0, duration: panelDuration, ease: 'power3.out', force3D: true }, panelInsertTime);
 
     if (itemEls.length) {
       const itemsStartRatio = 0.15;
       const itemsStart = panelInsertTime + panelDuration * itemsStartRatio;
-      tl.to(itemEls, { yPercent: 0, rotate: 0, duration: 1, ease: 'power4.out', stagger: { each: 0.1, from: 'start' } }, itemsStart);
+      tl.to(itemEls, { yPercent: 0, rotate: 0, duration: 0.7, ease: 'power3.out', force3D: true, stagger: { each: 0.065, from: 'start' } }, itemsStart);
       if (numberEls.length) {
-        tl.to(numberEls, { duration: 0.6, ease: 'power2.out', '--sm-num-opacity': 1, stagger: { each: 0.08, from: 'start' } }, itemsStart + 0.1);
+        tl.to(numberEls, { duration: 0.45, ease: 'power2.out', '--sm-num-opacity': 1, stagger: { each: 0.05, from: 'start' } }, itemsStart + 0.06);
       }
     }
 
@@ -118,7 +118,7 @@ export const StaggeredMenu = ({
       const socialsStart = panelInsertTime + panelDuration * 0.4;
       if (socialTitle) tl.to(socialTitle, { opacity: 1, duration: 0.5, ease: 'power2.out' }, socialsStart);
       if (socialLinks.length) {
-        tl.to(socialLinks, { y: 0, opacity: 1, duration: 0.55, ease: 'power3.out', stagger: { each: 0.08, from: 'start' }, onComplete: () => gsap.set(socialLinks, { clearProps: 'opacity' }) }, socialsStart + 0.04);
+        tl.to(socialLinks, { y: 0, opacity: 1, duration: 0.4, ease: 'power3.out', force3D: true, stagger: { each: 0.05, from: 'start' }, onComplete: () => gsap.set(socialLinks, { clearProps: 'opacity' }) }, socialsStart + 0.03);
       }
     }
 
@@ -152,18 +152,19 @@ export const StaggeredMenu = ({
     const offscreen = position === 'left' ? -100 : 100;
     closeTweenRef.current = gsap.to(all, {
       xPercent: offscreen,
-      duration: 0.32,
+      duration: 0.26,
       ease: 'power3.in',
+      force3D: true,
       overwrite: 'auto',
       onComplete: () => {
         const itemEls = Array.from(panel.querySelectorAll('.sm-panel-itemLabel'));
-        if (itemEls.length) gsap.set(itemEls, { yPercent: 140, rotate: 10 });
+        if (itemEls.length) gsap.set(itemEls, { yPercent: 140, rotate: 10, force3D: true });
         const numberEls = Array.from(panel.querySelectorAll('.sm-panel-list[data-numbering] .sm-panel-item'));
         if (numberEls.length) gsap.set(numberEls, { '--sm-num-opacity': 0 });
         const socialTitle = panel.querySelector('.sm-socials-title');
         const socialLinks = Array.from(panel.querySelectorAll('.sm-socials-link'));
         if (socialTitle) gsap.set(socialTitle, { opacity: 0 });
-        if (socialLinks.length) gsap.set(socialLinks, { y: 25, opacity: 0 });
+        if (socialLinks.length) gsap.set(socialLinks, { y: 25, opacity: 0, force3D: true });
         busyRef.current = false;
       },
     });
@@ -174,9 +175,9 @@ export const StaggeredMenu = ({
     if (!icon) return;
     spinTweenRef.current?.kill();
     if (opening) {
-      spinTweenRef.current = gsap.to(icon, { rotate: 225, duration: 0.8, ease: 'power4.out', overwrite: 'auto' });
+      spinTweenRef.current = gsap.to(icon, { rotate: 225, duration: 0.55, ease: 'power3.out', force3D: true, overwrite: 'auto' });
     } else {
-      spinTweenRef.current = gsap.to(icon, { rotate: 0, duration: 0.35, ease: 'power3.inOut', overwrite: 'auto' });
+      spinTweenRef.current = gsap.to(icon, { rotate: 0, duration: 0.24, ease: 'power3.inOut', force3D: true, overwrite: 'auto' });
     }
   }, []);
 
@@ -222,7 +223,7 @@ export const StaggeredMenu = ({
     gsap.set(inner, { yPercent: 0 });
     const lineCount = seq.length;
     const finalShift = ((lineCount - 1) / lineCount) * 100;
-    textCycleAnimRef.current = gsap.to(inner, { yPercent: -finalShift, duration: 0.5 + lineCount * 0.07, ease: 'power4.out' });
+    textCycleAnimRef.current = gsap.to(inner, { yPercent: -finalShift, duration: 0.32 + lineCount * 0.05, ease: 'power3.out', force3D: true });
   }, []);
 
   const toggleMenu = useCallback(() => {
