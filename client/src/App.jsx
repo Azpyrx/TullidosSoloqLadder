@@ -14,6 +14,7 @@ const API_BASE = SHOULD_IGNORE_LOCAL_API_IN_PROD
 const API = API_BASE;
 const CONSENT_STORAGE_KEY = "tsl-analytics-consent";
 const PROFILE_PLATFORM_STORAGE_KEY = "tsl-favorite-platform";
+
 const PROFILE_PLATFORM_OPTIONS = [
   {
     key: "dpm",
@@ -194,6 +195,17 @@ const PLAYER_OWNER_ALIASES = {
   "xryt#ifd": "Ryt",
   "xryt#euw": "Ryt",
 };
+
+function getPlayerOwner(player) {
+  const riotId = String(player?.riotId || "").trim();
+  if (!riotId) return "";
+
+  const altOf = String(player?.altOf || "").trim();
+  if (altOf) return altOf;
+
+  const normalizedId = riotId.toLowerCase();
+  return PLAYER_OWNER_ALIASES[normalizedId] || riotId;
+}
 
 function normalizeRole(role) {
   if (!role) return null;
@@ -808,6 +820,7 @@ export default function App() {
   const [filterRole, setFilterRole] = useState("ALL");
   const [rankingMode, setRankingMode] = useState("combined");
   const [rankingQueueSort, setRankingQueueSort] = useState("soloq");
+
   const [preferredPlatform, setPreferredPlatform] = useState(() => {
     const saved = String(localStorage.getItem(PROFILE_PLATFORM_STORAGE_KEY) || "").trim();
     return PROFILE_PLATFORM_OPTIONS.some((platform) => platform.key === saved) ? saved : "opgg";
@@ -872,6 +885,8 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(PROFILE_PLATFORM_STORAGE_KEY, preferredPlatform);
   }, [preferredPlatform]);
+
+
 
   const sendPageViewMetric = useCallback(async (targetPath) => {
     if (consentChoice !== "accepted") return;
@@ -1053,8 +1068,7 @@ export default function App() {
     const groups = new Map();
     for (const player of players) {
       if (!player?.riotId) continue;
-      const normalizedId = player.riotId.toLowerCase();
-      const owner = PLAYER_OWNER_ALIASES[normalizedId] || player.riotId;
+      const owner = getPlayerOwner(player);
       if (!groups.has(owner)) groups.set(owner, []);
       groups.get(owner).push(player);
     }
@@ -1116,8 +1130,7 @@ export default function App() {
       .filter((player) => Boolean(player?.riotId))
       .sort((a, b) => queueScore(b) - queueScore(a))
       .map((player) => {
-        const playerRiotId = String(player?.riotId || "").trim();
-        const ownerRiotId = PLAYER_OWNER_ALIASES[playerRiotId.toLowerCase()] || playerRiotId;
+        const ownerRiotId = getPlayerOwner(player);
         return {
           ...player,
           groupKey: player?.puuid || player?.riotId,
@@ -1550,6 +1563,7 @@ export default function App() {
             >
               Usuarios
             </button>
+
           </div>
         </div>
       </div>

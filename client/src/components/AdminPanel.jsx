@@ -14,6 +14,8 @@ export default function AdminPanel({ apiBase, onRosterChanged }) {
   const [adminToken, setAdminToken] = useState(() => localStorage.getItem("tsl-admin-token") || "");
   const [friendRiotId, setFriendRiotId] = useState("");
   const [friendMote, setFriendMote] = useState("");
+  const [friendIsAlt, setFriendIsAlt] = useState(false);
+  const [friendAltOf, setFriendAltOf] = useState("");
   const [friends, setFriends] = useState([]);
   const [metrics, setMetrics] = useState(null);
   const [loadingFriends, setLoadingFriends] = useState(false);
@@ -86,6 +88,12 @@ export default function AdminPanel({ apiBase, onRosterChanged }) {
       return;
     }
 
+    const safeAltOf = String(friendAltOf || "").trim();
+    if (friendIsAlt && !safeAltOf) {
+      setError("Si marcas que es alt, indica de quien es alt");
+      return;
+    }
+
     setSaving(true);
     setError("");
     setNotice("");
@@ -97,12 +105,16 @@ export default function AdminPanel({ apiBase, onRosterChanged }) {
           gameName: parsed.gameName,
           tagLine: parsed.tagLine,
           mote: String(friendMote || "").trim() || undefined,
+          isAlt: friendIsAlt || undefined,
+          altOf: friendIsAlt ? safeAltOf : undefined,
         }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
       setFriendRiotId("");
       setFriendMote("");
+      setFriendIsAlt(false);
+      setFriendAltOf("");
       setNotice("Jugador agregado correctamente");
       await loadFriends();
       await onRosterChanged?.();
@@ -111,7 +123,7 @@ export default function AdminPanel({ apiBase, onRosterChanged }) {
     } finally {
       setSaving(false);
     }
-  }, [adminToken, apiBase, authHeaders, friendMote, friendRiotId, loadFriends, onRosterChanged]);
+  }, [adminToken, apiBase, authHeaders, friendAltOf, friendIsAlt, friendMote, friendRiotId, loadFriends, onRosterChanged]);
 
   const handleDeletePlayer = useCallback(async (gameName, tagLine) => {
     if (!adminToken) {
@@ -224,6 +236,29 @@ export default function AdminPanel({ apiBase, onRosterChanged }) {
             value={friendMote}
             onChange={(event) => setFriendMote(event.target.value)}
           />
+          <label className="admin-label" htmlFor="new-player-alt-checkbox">
+            <input
+              id="new-player-alt-checkbox"
+              type="checkbox"
+              checked={friendIsAlt}
+              onChange={(event) => {
+                const checked = event.target.checked;
+                setFriendIsAlt(checked);
+                if (!checked) setFriendAltOf("");
+              }}
+            />{" "}
+            Es cuenta alt
+          </label>
+          <label className="admin-label" htmlFor="new-player-alt-of-input">Alt de (Riot ID o nombre)</label>
+          <input
+            id="new-player-alt-of-input"
+            type="text"
+            className="admin-input"
+            placeholder="Ej: Azpy#1337"
+            value={friendAltOf}
+            disabled={!friendIsAlt}
+            onChange={(event) => setFriendAltOf(event.target.value)}
+          />
           <div className="admin-actions">
             <button type="button" onClick={handleAddPlayer} disabled={saving}>Agregar</button>
             <button type="button" className="admin-ghost" onClick={loadFriends} disabled={saving || loadingFriends}>Recargar</button>
@@ -235,7 +270,10 @@ export default function AdminPanel({ apiBase, onRosterChanged }) {
             <ul className="admin-list">
               {friends.map((friend, idx) => (
                 <li key={`${friend.gameName}-${friend.tagLine}-${idx}`}>
-                  <span>{friend.gameName}#{friend.tagLine}</span>
+                  <span>
+                    {friend.gameName}#{friend.tagLine}
+                    {friend?.isAlt && friend?.altOf ? ` · ALT de ${friend.altOf}` : ""}
+                  </span>
                   <button
                     type="button"
                     className="admin-danger"
