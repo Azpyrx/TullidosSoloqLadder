@@ -2003,6 +2003,18 @@ button:disabled {
   text-overflow: ellipsis;
 }
 
+.riot-id-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.riot-id-row .riot-id {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
 .profile-platforms {
   display: inline-flex;
   align-items: center;
@@ -2051,6 +2063,15 @@ button:disabled {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   padding: 0 12px;
+
+.live-game-chip--inline {
+  height: 24px;
+  min-width: 70px;
+  font-size: 10px;
+  padding: 0 5px;
+  margin-left: 0;
+  flex-shrink: 0;
+}
   display: inline-flex;
   align-items: center;
   justify-content: center;

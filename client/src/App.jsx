@@ -1599,6 +1599,9 @@ export default function App() {
                 const playerWarnings = buildPlayerWarnings(p);
                 const playerProfileUrl = getPreferredPlatformUrl(p.mainAccountRiotId || p.riotId, preferredPlatform);
                 const liveGameUrl = buildLeagueOfGraphsLiveUrlFromRiotId(p.inGameRiotId || p.mainAccountRiotId || p.riotId);
+                const showInGameChip = Boolean(liveGameUrl) && Boolean(p.inGame);
+                const showRiotIdRow = shouldRenderRiotId(p.emote, p.riotId) || showInGameChip;
+                const inGameChipTitle = "Abrir live game en LeagueOfGraphs";
                 return (
                   <div
                     key={p.groupKey || p.riotId}
@@ -1622,7 +1625,30 @@ export default function App() {
                       )}
                       <div className="player-info">
                         {p.emote && <span className="riot-emote">{formatMoteDisplay(p.emote)}</span>}
-                        {shouldRenderRiotId(p.emote, p.riotId) && <span className="riot-id">{p.riotId}</span>}
+                        {showRiotIdRow && (
+                          <div className="riot-id-row">
+                            <span className="riot-id">{p.riotId}</span>
+                            {showInGameChip && (
+                              <button
+                                type="button"
+                                className="live-game-chip live-game-chip--inline"
+                                title={inGameChipTitle}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openOpggUrl(liveGameUrl);
+                                }}
+                                onKeyDown={(event) => {
+                                  if (event.key !== "Enter" && event.key !== " ") return;
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  openOpggUrl(liveGameUrl);
+                                }}
+                              >
+                                IN GAME
+                              </button>
+                            )}
+                          </div>
+                        )}
                         <div className="profile-platforms" aria-label="Perfiles externos">
                           {getProfilePlatformLinks(p.mainAccountRiotId || p.riotId).map((platform) => (
                             <button
@@ -1644,25 +1670,6 @@ export default function App() {
                               <img src={platform.icon} alt={platform.label} />
                             </button>
                           ))}
-                          {p.inGame && liveGameUrl && (
-                            <button
-                              type="button"
-                              className="live-game-chip"
-                              title="Abrir live game en LeagueOfGraphs"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                openOpggUrl(liveGameUrl);
-                              }}
-                              onKeyDown={(event) => {
-                                if (event.key !== "Enter" && event.key !== " ") return;
-                                event.preventDefault();
-                                event.stopPropagation();
-                                openOpggUrl(liveGameUrl);
-                              }}
-                            >
-                              IN GAME
-                            </button>
-                          )}
                         </div>
                         {p.accountCount > 1 && <span className="riot-alts">Cuenta top: {p.mainAccountRiotId || p.riotId}</span>}
                         {rankingMode === "all" && p.ownerRiotId && String(p.ownerRiotId).toLowerCase() !== String(p.riotId || "").toLowerCase() && (
