@@ -1488,44 +1488,80 @@ function getFriendEmote(friend) {
   return null;
 }
 
+function getFriendAltOwner(friend) {
+  if (!friend || typeof friend !== "object") return null;
+  const owner = typeof friend.altOf === "string" ? friend.altOf.trim() : "";
+  return owner || null;
+}
+
+function isFriendAlt(friend) {
+  if (!friend || typeof friend !== "object") return false;
+  if (friend.isAlt === true) return true;
+  return Boolean(getFriendAltOwner(friend));
+}
+
 function normalizeRiotId(gameName, tagLine) {
   if (!gameName || !tagLine) return null;
   return `${String(gameName).trim()}#${String(tagLine).trim()}`.toLowerCase();
 }
 
-function buildFriendEmoteMaps(friends) {
+function buildFriendMetadataMaps(friends) {
   const byPuuid = new Map();
   const byRiotId = new Map();
 
   for (const friend of friends || []) {
-    const emote = getFriendEmote(friend);
-    if (!emote) continue;
+    const metadata = {
+      emote: getFriendEmote(friend),
+      isAlt: isFriendAlt(friend),
+      altOf: getFriendAltOwner(friend),
+    };
+    const hasMetadata = metadata.emote || metadata.isAlt || metadata.altOf;
+    if (!hasMetadata) continue;
 
-    if (friend?.puuid) byPuuid.set(friend.puuid, emote);
+    if (friend?.puuid) byPuuid.set(friend.puuid, metadata);
 
     const friendRiotId = normalizeRiotId(friend?.gameName, friend?.tagLine);
-    if (friendRiotId) byRiotId.set(friendRiotId, emote);
+    if (friendRiotId) byRiotId.set(friendRiotId, metadata);
   }
 
   return { byPuuid, byRiotId };
 }
 
-function applyFriendEmotesToPlayers(players, friends) {
+function applyFriendMetadataToPlayers(players, friends) {
   if (!Array.isArray(players) || players.length === 0) return players;
-  const { byPuuid, byRiotId } = buildFriendEmoteMaps(friends);
+  const { byPuuid, byRiotId } = buildFriendMetadataMaps(friends);
 
   return players.map((player) => {
     const existingEmote = getFriendEmote(player);
-    const byPuuidEmote = player?.puuid ? byPuuid.get(player.puuid) : null;
+    const existingAltOf = getFriendAltOwner(player);
+    const existingIsAlt = isFriendAlt(player);
+    const byPuuidMetadata = player?.puuid ? byPuuid.get(player.puuid) : null;
 
     const playerRiotId = player?.riotId
       ? String(player.riotId).trim().toLowerCase()
       : normalizeRiotId(player?.gameName, player?.tagLine);
-    const byRiotIdEmote = playerRiotId ? byRiotId.get(playerRiotId) : null;
+    const byRiotIdMetadata = playerRiotId ? byRiotId.get(playerRiotId) : null;
 
-    const resolvedEmote = existingEmote || byPuuidEmote || byRiotIdEmote || null;
-    if (resolvedEmote === player?.emote) return player;
-    return { ...player, emote: resolvedEmote };
+    const resolvedMetadata = byPuuidMetadata || byRiotIdMetadata || null;
+
+    const resolvedEmote = existingEmote || resolvedMetadata?.emote || null;
+    const resolvedAltOf = resolvedMetadata?.altOf || existingAltOf || null;
+    const resolvedIsAlt = Boolean(resolvedMetadata?.isAlt || resolvedAltOf || existingIsAlt);
+
+    if (
+      resolvedEmote === player?.emote
+      && resolvedAltOf === (player?.altOf || null)
+      && resolvedIsAlt === Boolean(player?.isAlt)
+    ) {
+      return player;
+    }
+
+    return {
+      ...player,
+      emote: resolvedEmote,
+      isAlt: resolvedIsAlt,
+      altOf: resolvedAltOf,
+    };
   });
 }
 
@@ -1565,6 +1601,8 @@ async function buildLadderSnapshot(friends, previousPlayers = [], friendIndexesT
     .map((result, index) => {
       const friend = friends[index] || {};
       const friendEmote = getFriendEmote(friend);
+      const friendAltOf = getFriendAltOwner(friend);
+      const friendIsAlt = isFriendAlt(friend);
 
       if (result.status === "skipped") {
         const snapshotFallback = getSnapshotFallback(friend);
@@ -1572,6 +1610,8 @@ async function buildLadderSnapshot(friends, previousPlayers = [], friendIndexesT
           return {
             ...snapshotFallback,
             emote: friendEmote || snapshotFallback.emote || null,
+            isAlt: friendIsAlt || Boolean(snapshotFallback?.isAlt) || Boolean(snapshotFallback?.altOf),
+            altOf: friendAltOf || snapshotFallback.altOf || null,
             staleFromCache: true,
             error: null,
           };
@@ -1582,6 +1622,8 @@ async function buildLadderSnapshot(friends, previousPlayers = [], friendIndexesT
           return {
             ...previous,
             emote: friendEmote || previous.emote || null,
+            isAlt: friendIsAlt || Boolean(previous?.isAlt) || Boolean(previous?.altOf),
+            altOf: friendAltOf || previous.altOf || null,
             staleFromCache: true,
             error: null,
           };
@@ -1596,6 +1638,8 @@ async function buildLadderSnapshot(friends, previousPlayers = [], friendIndexesT
           tagLine: friend.tagLine || "TAG",
           puuid: friend.puuid || null,
           emote: friendEmote,
+          isAlt: friendIsAlt,
+          altOf: friendAltOf,
           error: "Pendiente de actualizar",
           soloq: null,
         };
@@ -1605,6 +1649,8 @@ async function buildLadderSnapshot(friends, previousPlayers = [], friendIndexesT
         const snapshot = {
           ...result.value,
           emote: friendEmote,
+          isAlt: friendIsAlt,
+          altOf: friendAltOf,
         };
         const keys = buildFriendKeys(friend, snapshot);
         for (const key of keys) {
@@ -1620,6 +1666,8 @@ async function buildLadderSnapshot(friends, previousPlayers = [], friendIndexesT
         const snapshot = {
           ...snapshotFallback,
           emote: friendEmote || snapshotFallback.emote || null,
+          isAlt: friendIsAlt || Boolean(snapshotFallback?.isAlt) || Boolean(snapshotFallback?.altOf),
+          altOf: friendAltOf || snapshotFallback.altOf || null,
           staleFromCache: true,
           error: null,
         };
@@ -1635,6 +1683,8 @@ async function buildLadderSnapshot(friends, previousPlayers = [], friendIndexesT
         const snapshot = {
           ...previous,
           emote: friendEmote || previous.emote || null,
+          isAlt: friendIsAlt || Boolean(previous?.isAlt) || Boolean(previous?.altOf),
+          altOf: friendAltOf || previous.altOf || null,
           staleFromCache: true,
           error: null,
         };
@@ -1655,6 +1705,8 @@ async function buildLadderSnapshot(friends, previousPlayers = [], friendIndexesT
         tagLine: friend.tagLine || "TAG",
         puuid: friend.puuid || null,
         emote: friendEmote,
+        isAlt: friendIsAlt,
+        altOf: friendAltOf,
         error: isRateLimited
           ? "Riot en rate limit, reintentando con cache"
           : (result.reason?.message || "Error"),
@@ -1663,8 +1715,8 @@ async function buildLadderSnapshot(friends, previousPlayers = [], friendIndexesT
     })
     .sort((a, b) => rankScore(b) - rankScore(a));
 
-  const playersWithEmotes = applyFriendEmotesToPlayers(players, friends);
-  const playersWithDuoSignals = annotateDuoPartners(playersWithEmotes);
+  const playersWithMetadata = applyFriendMetadataToPlayers(players, friends);
+  const playersWithDuoSignals = annotateDuoPartners(playersWithMetadata);
 
   // Persist current Riot ID + puuid mapping so name/tag changes are tracked automatically.
   const nextFriends = results.map((result, index) => {
@@ -1677,7 +1729,11 @@ async function buildLadderSnapshot(friends, previousPlayers = [], friendIndexesT
       puuid: p.puuid,
     };
     const friendEmote = getFriendEmote(friend);
+    const friendAltOf = getFriendAltOwner(friend);
+    const friendIsAlt = isFriendAlt(friend);
     if (friendEmote) next.mote = friendEmote;
+    if (friendIsAlt) next.isAlt = true;
+    if (friendAltOf) next.altOf = friendAltOf;
     return next;
   });
 
@@ -1788,9 +1844,9 @@ app.get("/api/ladder", async (req, res) => {
       await refreshLadderCache();
     }
 
-    const playersWithEmotes = applyFriendEmotesToPlayers(ladderCache.players, friendsForEmotes);
+    const playersWithMetadata = applyFriendMetadataToPlayers(ladderCache.players, friendsForEmotes);
     res.json({
-      players: playersWithEmotes,
+      players: playersWithMetadata,
       cachedAt: ladderCache.lastUpdatedAt,
       cacheTtlMs: LADDER_CACHE_TTL_MS,
       stale: Boolean(ladderCache.lastError),
@@ -1806,9 +1862,9 @@ app.get("/api/ladder", async (req, res) => {
     }
 
     if (ladderCache.players.length > 0) {
-      const playersWithEmotes = applyFriendEmotesToPlayers(ladderCache.players, friendsForEmotes);
+      const playersWithMetadata = applyFriendMetadataToPlayers(ladderCache.players, friendsForEmotes);
       return res.json({
-        players: playersWithEmotes,
+        players: playersWithMetadata,
         cachedAt: ladderCache.lastUpdatedAt,
         cacheTtlMs: LADDER_CACHE_TTL_MS,
         stale: true,
@@ -1832,10 +1888,17 @@ app.get("/api/friends", (req, res) => {
 
 // POST /api/friends  — añadir amigo { gameName, tagLine }
 app.post("/api/friends", requireAdmin, async (req, res) => {
-  const { gameName, tagLine, emote, mote } = req.body;
+  const { gameName, tagLine, emote, mote, isAlt, altOf } = req.body;
   if (!gameName || !tagLine) {
     return res.status(400).json({ error: "gameName y tagLine son obligatorios" });
   }
+
+  const sanitizedAltOf = typeof altOf === "string" ? altOf.trim() : "";
+  const normalizedIsAlt = Boolean(isAlt) || Boolean(sanitizedAltOf);
+  if (normalizedIsAlt && !sanitizedAltOf) {
+    return res.status(400).json({ error: "Si marcas cuenta alt, debes indicar de quien es" });
+  }
+
   let friends;
   try {
     friends = JSON.parse(fs.readFileSync(FRIENDS_FILE, "utf8"));
@@ -1855,6 +1918,10 @@ app.post("/api/friends", requireAdmin, async (req, res) => {
       ? emote.trim()
       : (typeof mote === "string" && mote.trim() ? mote.trim() : null);
   if (friendEmote) friend.mote = friendEmote;
+  if (normalizedIsAlt) {
+    friend.isAlt = true;
+    friend.altOf = sanitizedAltOf;
+  }
   friends.push(friend);
   fs.writeFileSync(FRIENDS_FILE, JSON.stringify(friends, null, 2));
 
