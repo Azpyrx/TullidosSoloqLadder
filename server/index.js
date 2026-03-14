@@ -17,11 +17,13 @@ const RIOT_API_KEY = (process.env.RIOT_API_KEY || "").trim();
 const FRIENDS_FILE = path.join(__dirname, "friends.json");
 const CACHE_FILE = path.join(__dirname, "ladder-cache.json");
 const API_STATS_FILE = path.join(__dirname, "api-stats.json");
+const METRICS_FILE = path.join(__dirname, "visit-metrics.json");
 const CLIENT_DIST_DIR = path.join(__dirname, "..", "client", "dist");
 const CLIENT_INDEX_FILE = path.join(CLIENT_DIST_DIR, "index.html");
 const HAS_CLIENT_BUILD = fs.existsSync(CLIENT_INDEX_FILE);
 const REGION = "europe";
 const PLATFORM = "euw1";
+const ADMIN_TOKEN = String(process.env.ADMIN_TOKEN || "").trim();
 const LADDER_CACHE_TTL_MS = Number(process.env.LADDER_CACHE_TTL_MS) || 2 * 60 * 1000;
 const MATCH_SYNC_TTL_MS = Number(process.env.MATCH_SYNC_TTL_MS) || 2 * 60 * 1000;
 const RATE_LIMIT_FALLBACK_MS = Number(process.env.RATE_LIMIT_FALLBACK_MS) || 60 * 1000;
@@ -32,11 +34,13 @@ const DUO_SOLOQ_RECENT_GAMES = 10;
 const FULL_REFRESH_EVERY_CYCLE = String(process.env.FULL_REFRESH_EVERY_CYCLE || "true").toLowerCase() !== "false";
 const ACCOUNT_REFRESH_TTL_MS = Number(process.env.ACCOUNT_REFRESH_TTL_MS) || 24 * 60 * 60 * 1000;
 const SUMMONER_REFRESH_TTL_MS = Number(process.env.SUMMONER_REFRESH_TTL_MS) || 6 * 60 * 60 * 1000;
+const ACTIVE_GAME_STATUS_TTL_MS = Number(process.env.ACTIVE_GAME_STATUS_TTL_MS) || 30 * 1000;
 const LP_STEP_ANOMALY_WINDOW_MS = Number(process.env.LP_STEP_ANOMALY_WINDOW_MS) || 30 * 60 * 1000;
 const LP_STEP_ANOMALY_THRESHOLD = Number(process.env.LP_STEP_ANOMALY_THRESHOLD) || 350;
 const ACTIVITY_FEED_HISTORY_LIMIT = Math.max(5, Number(process.env.ACTIVITY_FEED_HISTORY_LIMIT) || 20);
 const ACTIVITY_FEED_SCHEMA_VERSION = 3;
 const DELTA_TRACKING_VERSION = 3;
+const MAX_VISIT_METRICS_EVENTS = Math.max(200, Number(process.env.MAX_VISIT_METRICS_EVENTS) || 3000);
 
 // Riot personal key hard limits: 20 req/1 s, 100 req/2 min.
 // We budget to 18/1 s and 90/2 min for a safety margin.
@@ -49,6 +53,94 @@ let totalRiotRequests = 0;
 let todayRiotRequests = 0;
 let riotRateLimitedUntil = 0; // set reactively when a 429 is received
 let lastApiStatsPersistAt = 0;
+
+const visitMetrics = {
+  totalPageViews: 0,
+  totalConsentedPageViews: 0,
+  lastUpdatedAt: null,
+  events: [],
+};
+
+function loadVisitMetricsFromFile() {
+  try {
+    if (!fs.existsSync(METRICS_FILE)) return;
+    const parsed = JSON.parse(fs.readFileSync(METRICS_FILE, "utf8"));
+    const events = Array.isArray(parsed?.events) ? parsed.events : [];
+
+    visitMetrics.totalPageViews = Number(parsed?.totalPageViews) || events.length;
+    visitMetrics.totalConsentedPageViews = Number(parsed?.totalConsentedPageViews) || events.filter((ev) => Boolean(ev?.consentAccepted)).length;
+    visitMetrics.lastUpdatedAt = parsed?.lastUpdatedAt || null;
+    visitMetrics.events = events.slice(-MAX_VISIT_METRICS_EVENTS);
+  } catch (err) {
+    console.warn("Could not load visit metrics from file:", err.message);
+  }
+}
+
+function saveVisitMetricsToFile() {
+  try {
+    fs.writeFileSync(
+      METRICS_FILE,
+      JSON.stringify({
+        totalPageViews: visitMetrics.totalPageViews,
+        totalConsentedPageViews: visitMetrics.totalConsentedPageViews,
+        lastUpdatedAt: visitMetrics.lastUpdatedAt,
+        events: visitMetrics.events.slice(-MAX_VISIT_METRICS_EVENTS),
+      }, null, 2)
+    );
+  } catch (err) {
+    console.warn("Could not save visit metrics to file:", err.message);
+  }
+}
+
+function getClientIp(req) {
+  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  const realIp = String(req.headers["x-real-ip"] || "").trim();
+  const remoteAddress = String(req.socket?.remoteAddress || "").trim();
+  return forwarded || realIp || remoteAddress || "unknown";
+}
+
+function anonymizeIp(rawIp) {
+  const ip = String(rawIp || "").trim();
+  if (!ip || ip === "unknown") return "unknown";
+
+  // IPv6 mapped IPv4 (e.g. ::ffff:1.2.3.4)
+  const mapped = ip.includes("::ffff:") ? ip.split("::ffff:").pop() : ip;
+
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(mapped)) {
+    const parts = mapped.split(".");
+    parts[3] = "0";
+    return parts.join(".");
+  }
+
+  if (mapped.includes(":")) {
+    const parts = mapped.split(":").filter((p) => p.length > 0);
+    if (parts.length <= 2) return `${parts.join(":")}:0000`;
+    return `${parts.slice(0, 2).join(":")}:0000:0000:0000:0000:0000:0000`;
+  }
+
+  return "unknown";
+}
+
+function requireAdmin(req, res, next) {
+  if (!ADMIN_TOKEN) {
+    return res.status(503).json({
+      error: "El panel admin no esta configurado. Define ADMIN_TOKEN en server/.env",
+    });
+  }
+
+  const rawHeader = String(req.headers["x-admin-token"] || "").trim();
+  const authHeader = String(req.headers.authorization || "").trim();
+  const bearerToken = authHeader.toLowerCase().startsWith("bearer ")
+    ? authHeader.slice(7).trim()
+    : "";
+  const candidate = rawHeader || bearerToken;
+
+  if (!candidate || candidate !== ADMIN_TOKEN) {
+    return res.status(401).json({ error: "No autorizado" });
+  }
+
+  return next();
+}
 
 function getDateKey(date = new Date()) {
   const y = date.getFullYear();
@@ -1122,7 +1214,11 @@ async function fetchSummonerWithCache(puuid) {
       `https://${PLATFORM}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/${encodeURIComponent(puuid)}`
     );
     const raw = ladderCache.rawDataByPuuid[puuid] || (ladderCache.rawDataByPuuid[puuid] = {});
-    raw.summoner = { profileIconId: summoner.profileIconId, summonerLevel: summoner.summonerLevel };
+    raw.summoner = {
+      id: summoner.id || null,
+      profileIconId: summoner.profileIconId,
+      summonerLevel: summoner.summonerLevel,
+    };
     raw.lastSummonerAt = new Date().toISOString();
     return summoner;
   } catch (err) {
@@ -1132,6 +1228,82 @@ async function fetchSummonerWithCache(puuid) {
       return cached;
     }
     throw err;
+  }
+}
+
+function isRiot404Error(err) {
+  const msg = String(err?.message || "");
+  return msg.includes("Riot API 404");
+}
+
+async function fetchActiveGameStatusWithCache(puuid, encryptedSummonerId) {
+  const raw = ladderCache.rawDataByPuuid[puuid] || (ladderCache.rawDataByPuuid[puuid] = {});
+  const cached = raw.activeGameStatus;
+
+  if (cached && isCacheFresh(cached.lastCheckedAt, ACTIVE_GAME_STATUS_TTL_MS)) {
+    return cached;
+  }
+
+  if (!encryptedSummonerId) {
+    const fallback = cached || {
+      inGame: false,
+      gameId: null,
+      gameMode: null,
+      gameQueueConfigId: null,
+      gameStartTime: null,
+      lastCheckedAt: new Date().toISOString(),
+    };
+    raw.activeGameStatus = fallback;
+    return fallback;
+  }
+
+  try {
+    const activeGame = await riotFetch(
+      `https://${PLATFORM}.api.riotgames.com/lol/spectator/v5/active-games/by-summoner/${encodeURIComponent(encryptedSummonerId)}`
+    );
+
+    const next = {
+      inGame: Boolean(activeGame?.gameId),
+      gameId: activeGame?.gameId || null,
+      gameMode: activeGame?.gameMode || null,
+      gameQueueConfigId: Number.isFinite(Number(activeGame?.gameQueueConfigId))
+        ? Number(activeGame.gameQueueConfigId)
+        : null,
+      gameStartTime: Number.isFinite(Number(activeGame?.gameStartTime))
+        ? Number(activeGame.gameStartTime)
+        : null,
+      lastCheckedAt: new Date().toISOString(),
+    };
+
+    raw.activeGameStatus = next;
+    return next;
+  } catch (err) {
+    if (isRiot404Error(err)) {
+      const next = {
+        inGame: false,
+        gameId: null,
+        gameMode: null,
+        gameQueueConfigId: null,
+        gameStartTime: null,
+        lastCheckedAt: new Date().toISOString(),
+      };
+      raw.activeGameStatus = next;
+      return next;
+    }
+
+    if (cached) {
+      console.log(`[CACHE] active game fallback for ${puuid.slice(0, 8)}…`);
+      return cached;
+    }
+
+    return {
+      inGame: false,
+      gameId: null,
+      gameMode: null,
+      gameQueueConfigId: null,
+      gameStartTime: null,
+      lastCheckedAt: new Date().toISOString(),
+    };
   }
 }
 
@@ -1184,6 +1356,7 @@ async function fetchAccountByPuuidWithCache(puuid) {
 async function fetchPlayerDataFromAccount(account, fallback = {}) {
   const summoner = await fetchSummonerWithCache(account.puuid);
   const entries  = await fetchLeagueEntriesWithCache(account.puuid);
+  const activeGameStatus = await fetchActiveGameStatusWithCache(account.puuid, summoner?.id || null);
 
   const soloq = entries.find((e) => e.queueType === "RANKED_SOLO_5x5") || null;
   const flex  = entries.find((e) => e.queueType === "RANKED_FLEX_SR")  || null;
@@ -1202,6 +1375,8 @@ async function fetchPlayerDataFromAccount(account, fallback = {}) {
     summonerLevel: summoner.summonerLevel,
     soloq,
     flex,
+    inGame: Boolean(activeGameStatus?.inGame),
+    activeGameStatus,
     topChampions,
     mainRole,
     recentRankedMatchIds,
@@ -1656,7 +1831,7 @@ app.get("/api/friends", (req, res) => {
 });
 
 // POST /api/friends  — añadir amigo { gameName, tagLine }
-app.post("/api/friends", async (req, res) => {
+app.post("/api/friends", requireAdmin, async (req, res) => {
   const { gameName, tagLine, emote, mote } = req.body;
   if (!gameName || !tagLine) {
     return res.status(400).json({ error: "gameName y tagLine son obligatorios" });
@@ -1695,7 +1870,7 @@ app.post("/api/friends", async (req, res) => {
 });
 
 // DELETE /api/friends/:gameName/:tagLine
-app.delete("/api/friends/:gameName/:tagLine", async (req, res) => {
+app.delete("/api/friends/:gameName/:tagLine", requireAdmin, async (req, res) => {
   const { gameName, tagLine } = req.params;
   let friends;
   try {
@@ -1722,6 +1897,95 @@ app.delete("/api/friends/:gameName/:tagLine", async (req, res) => {
   }
 
   res.json({ ok: true });
+});
+
+// POST /api/metrics/page-view — registra visita anonima tras consentimiento
+app.post("/api/metrics/page-view", (req, res) => {
+  const consentAccepted = Boolean(req.body?.consentAccepted);
+  if (!consentAccepted) {
+    return res.status(202).json({ ok: true, stored: false, reason: "consent-not-accepted" });
+  }
+
+  const pagePath = String(req.body?.pagePath || req.originalUrl || "/").slice(0, 200);
+  const country = String(
+    req.headers["cf-ipcountry"]
+    || req.headers["x-vercel-ip-country"]
+    || req.headers["x-country-code"]
+    || req.body?.country
+    || "unknown"
+  ).slice(0, 80);
+  const city = String(req.headers["x-vercel-ip-city"] || req.body?.city || "unknown").slice(0, 120);
+  const source = String(req.body?.source || req.headers.referer || "direct").slice(0, 220);
+  const language = String(req.body?.language || req.headers["accept-language"] || "unknown").slice(0, 80);
+  const timezone = String(req.body?.timezone || "unknown").slice(0, 80);
+  const screen = String(req.body?.screen || "unknown").slice(0, 40);
+
+  const event = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    type: "page_view",
+    at: new Date().toISOString(),
+    pagePath,
+    source,
+    country,
+    city,
+    language,
+    timezone,
+    screen,
+    userAgent: String(req.headers["user-agent"] || "unknown").slice(0, 300),
+    anonymizedIp: anonymizeIp(getClientIp(req)),
+    consentAccepted: true,
+  };
+
+  visitMetrics.totalPageViews += 1;
+  visitMetrics.totalConsentedPageViews += 1;
+  visitMetrics.lastUpdatedAt = event.at;
+  visitMetrics.events.push(event);
+  if (visitMetrics.events.length > MAX_VISIT_METRICS_EVENTS) {
+    visitMetrics.events = visitMetrics.events.slice(-MAX_VISIT_METRICS_EVENTS);
+  }
+  saveVisitMetricsToFile();
+
+  return res.status(201).json({ ok: true, stored: true });
+});
+
+// GET /api/admin/metrics — resumen y detalle de visitas anonimas
+app.get("/api/admin/metrics", requireAdmin, (req, res) => {
+  const days = {};
+  const byCountry = {};
+  const byPath = {};
+
+  for (const event of visitMetrics.events) {
+    const day = String(event?.at || "").slice(0, 10) || "unknown";
+    const country = String(event?.country || "unknown").toUpperCase();
+    const pathValue = String(event?.pagePath || "/");
+
+    days[day] = (days[day] || 0) + 1;
+    byCountry[country] = (byCountry[country] || 0) + 1;
+    byPath[pathValue] = (byPath[pathValue] || 0) + 1;
+  }
+
+  const topCountries = Object.entries(byCountry)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([country, views]) => ({ country, views }));
+
+  const topPaths = Object.entries(byPath)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([pathValue, views]) => ({ path: pathValue, views }));
+
+  return res.json({
+    ok: true,
+    totals: {
+      pageViews: visitMetrics.totalPageViews,
+      consentedPageViews: visitMetrics.totalConsentedPageViews,
+    },
+    lastUpdatedAt: visitMetrics.lastUpdatedAt,
+    viewsByDay: days,
+    topCountries,
+    topPaths,
+    recentEvents: visitMetrics.events.slice(-120).reverse(),
+  });
 });
 
 // GET /api/status — expone estado del rate limit y cache para debug
@@ -1782,7 +2046,7 @@ app.get("/api/activity-feed", async (req, res) => {
 });
 
 // POST /api/force-refresh — fuerza refresco inmediato de todos los jugadores
-app.post("/api/force-refresh", async (req, res) => {
+app.post("/api/force-refresh", requireAdmin, async (req, res) => {
   if (!RIOT_API_KEY) return res.status(500).json({ error: "Sin RIOT_API_KEY" });
   if (ladderCache.refreshPromise) {
     await ladderCache.refreshPromise.catch(() => {});
@@ -1817,6 +2081,7 @@ app.listen(PORT, () => {
 fetchDDragonVersion().catch(console.error);
 
 loadApiStatsFromFile();
+loadVisitMetricsFromFile();
 
 // Load cache from file on startup — NO API calls
 const cacheLoadedFromDisk = loadCacheFromFile();
@@ -1842,14 +2107,17 @@ scheduleLadderRefresh();
 
 process.on("SIGINT", () => {
   saveApiStatsToFile(true);
+  saveVisitMetricsToFile();
   process.exit(0);
 });
 
 process.on("SIGTERM", () => {
   saveApiStatsToFile(true);
+  saveVisitMetricsToFile();
   process.exit(0);
 });
 
 process.on("exit", () => {
   saveApiStatsToFile(true);
+  saveVisitMetricsToFile();
 });

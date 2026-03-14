@@ -137,6 +137,8 @@ cp server/.env.example server/.env
 | `SUMMONER_REFRESH_TTL_MS` | ❌ | `21600000` | TTL de datos de invocador (6h) |
 | `LP_STEP_ANOMALY_WINDOW_MS` | ❌ | `1800000` | Ventana para detectar anomalías de LP (30m) |
 | `LP_STEP_ANOMALY_THRESHOLD` | ❌ | `55` | Umbral de LP para considerar salto anómalo |
+| `ADMIN_TOKEN` | ✅ para admin | — | Token para acceder al panel admin (altas/bajas, refresh y métricas) |
+| `MAX_VISIT_METRICS_EVENTS` | ❌ | `3000` | Máximo de eventos de visitas anonimizadas guardados |
 
 ---
 
@@ -187,10 +189,12 @@ Todos los endpoints tienen el prefijo `/api`.
 | `GET` | `/api/ladder` | Devuelve todos los jugadores ordenados por rango |
 | `GET` | `/api/player?gameName=X&tagLine=Y` | Datos de un jugador específico |
 | `GET` | `/api/friends` | Lista los jugadores en seguimiento |
-| `POST` | `/api/friends` | Añade un jugador (`{ gameName, tagLine, mote? }`) |
-| `DELETE` | `/api/friends/:gameName/:tagLine` | Elimina un jugador del seguimiento |
+| `POST` | `/api/friends` | Añade un jugador (`{ gameName, tagLine, mote? }`) - requiere `x-admin-token` |
+| `DELETE` | `/api/friends/:gameName/:tagLine` | Elimina un jugador del seguimiento - requiere `x-admin-token` |
 | `GET` | `/api/status` | Estadísticas de la API (requests, rate limit) |
-| `POST` | `/api/force-refresh` | Fuerza un refresco manual del ladder |
+| `POST` | `/api/force-refresh` | Fuerza un refresco manual del ladder - requiere `x-admin-token` |
+| `POST` | `/api/metrics/page-view` | Registra una vista anonimizada (solo con consentimiento) |
+| `GET` | `/api/admin/metrics` | Panel de métricas agregadas y últimos eventos - requiere `x-admin-token` |
 
 ### Ejemplo de respuesta — `/api/ladder`
 

@@ -5,6 +5,8 @@ const TABS = [
   { id: "ranking", label: "Ranking" },
   { id: "activity", label: "Actividad" },
   { id: "users", label: "Usuarios" },
+  { id: "admin", label: "Admin" },
+  { id: "privacy", label: "Privacidad" },
   { id: "info", label: "Informacion" },
 ];
 
@@ -30,7 +32,7 @@ export default function AppLayout({ onTabChange, activeTab, children }) {
         logoAlt="Tullidos"
       />
       <div className="page-content">{children}</div>
-      {activeTab !== "users" && <FooterCarousel />}
+      {!["users", "admin", "privacy"].includes(activeTab) && <FooterCarousel />}
     </>
   );
 }

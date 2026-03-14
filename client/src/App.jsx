@@ -2,9 +2,63 @@
 import "./index.css";
 import AppLayout from "./components/AppLayout.jsx";
 import Masonry from "react-masonry-css";
+import AdminPanel from "./components/AdminPanel.jsx";
+import PrivacyPage from "./components/PrivacyPage.jsx";
 
-const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? "http://localhost:3001" : window.location.origin);
+const RAW_API_ENV = String(import.meta.env.VITE_API_URL || "").trim();
+const IS_LOCAL_API_URL = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(RAW_API_ENV);
+const SHOULD_IGNORE_LOCAL_API_IN_PROD = !import.meta.env.DEV && IS_LOCAL_API_URL;
+const API_BASE = SHOULD_IGNORE_LOCAL_API_IN_PROD
+  ? window.location.origin
+  : (RAW_API_ENV || (import.meta.env.DEV ? "http://localhost:3001" : window.location.origin));
 const API = API_BASE;
+const CONSENT_STORAGE_KEY = "tsl-analytics-consent";
+const PROFILE_PLATFORM_STORAGE_KEY = "tsl-favorite-platform";
+const PROFILE_PLATFORM_OPTIONS = [
+  {
+    key: "dpm",
+    label: "dpm.lol",
+    icon: "https://www.google.com/s2/favicons?domain=dpm.lol&sz=64",
+    buildUrl: buildDpmLolUrlFromRiotId,
+  },
+  {
+    key: "opgg",
+    label: "OP.GG",
+    icon: "https://www.google.com/s2/favicons?domain=op.gg&sz=64",
+    buildUrl: buildOpggUrlFromRiotId,
+  },
+  {
+    key: "deeplol",
+    label: "deeplol.gg",
+    icon: "https://www.google.com/s2/favicons?domain=deeplol.gg&sz=64",
+    buildUrl: buildDeeplolUrlFromRiotId,
+  },
+  {
+    key: "log",
+    label: "League of Graphs",
+    icon: "https://www.google.com/s2/favicons?domain=leagueofgraphs.com&sz=64",
+    buildUrl: buildLeagueOfGraphsUrlFromRiotId,
+  },
+];
+
+function tabFromPathname(pathname) {
+  const normalized = String(pathname || "").toLowerCase();
+  if (normalized === "/admin") return "admin";
+  if (normalized === "/privacidad") return "privacy";
+  if (normalized === "/actividad") return "activity";
+  if (normalized === "/usuarios") return "users";
+  if (normalized === "/info") return "info";
+  return "ranking";
+}
+
+function pathFromTab(tabId) {
+  if (tabId === "admin") return "/admin";
+  if (tabId === "privacy") return "/privacidad";
+  if (tabId === "activity") return "/actividad";
+  if (tabId === "users") return "/usuarios";
+  if (tabId === "info") return "/info";
+  return "/";
+}
 
 const TIER_COLORS = {
   CHALLENGER: "#f0e68c",
@@ -205,6 +259,16 @@ function buildLeagueOfGraphsUrlFromRiotId(riotId) {
   return `https://www.leagueofgraphs.com/summoner/euw/${encodeURIComponent(gameName)}-${encodeURIComponent(tagLine)}`;
 }
 
+function buildLeagueOfGraphsLiveUrlFromRiotId(riotId) {
+  const raw = String(riotId || "").trim();
+  if (!raw || !raw.includes("#")) return null;
+  const [gameNameRaw, tagLineRaw] = raw.split("#");
+  const gameName = String(gameNameRaw || "").trim();
+  const tagLine = String(tagLineRaw || "").trim();
+  if (!gameName || !tagLine) return null;
+  return `https://www.leagueofgraphs.com/summoner/euw/${encodeURIComponent(gameName)}-${encodeURIComponent(tagLine)}/live-game`;
+}
+
 function buildDeeplolUrlFromRiotId(riotId) {
   const raw = String(riotId || "").trim();
   if (!raw || !raw.includes("#")) return null;
@@ -226,32 +290,22 @@ function buildDpmLolUrlFromRiotId(riotId) {
 }
 
 function getProfilePlatformLinks(riotId) {
-  return [
-    {
-      key: "dpm",
-      label: "dpm.lol",
-      icon: "https://www.google.com/s2/favicons?domain=dpm.lol&sz=64",
-      url: buildDpmLolUrlFromRiotId(riotId),
-    },
-    {
-      key: "opgg",
-      label: "OP.GG",
-      icon: "https://www.google.com/s2/favicons?domain=op.gg&sz=64",
-      url: buildOpggUrlFromRiotId(riotId),
-    },
-    {
-      key: "deeplol",
-      label: "deeplol.gg",
-      icon: "https://www.google.com/s2/favicons?domain=deeplol.gg&sz=64",
-      url: buildDeeplolUrlFromRiotId(riotId),
-    },
-    {
-      key: "log",
-      label: "League of Graphs",
-      icon: "https://www.google.com/s2/favicons?domain=leagueofgraphs.com&sz=64",
-      url: buildLeagueOfGraphsUrlFromRiotId(riotId),
-    },
-  ].filter((item) => Boolean(item.url));
+  return PROFILE_PLATFORM_OPTIONS
+    .map((platform) => ({
+      key: platform.key,
+      label: platform.label,
+      icon: platform.icon,
+      url: platform.buildUrl(riotId),
+    }))
+    .filter((item) => Boolean(item.url));
+}
+
+function getPreferredPlatformUrl(riotId, preferredPlatformKey) {
+  const preferred = PROFILE_PLATFORM_OPTIONS.find((platform) => platform.key === preferredPlatformKey);
+  const fallback = PROFILE_PLATFORM_OPTIONS.find((platform) => platform.key === "opgg");
+  const preferredUrl = preferred?.buildUrl?.(riotId) || null;
+  if (preferredUrl) return preferredUrl;
+  return fallback?.buildUrl?.(riotId) || null;
 }
 
 function buildOpggMatchUrlFromEntry(entry) {
@@ -679,6 +733,13 @@ function ActivityTicker({ groupedPlayers }) {
         });
       }
     }
+
+    // Shuffle signals so activity warnings rotate in a less predictable order.
+    for (let i = list.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [list[i], list[j]] = [list[j], list[i]];
+    }
+
     return list;
   }, [groupedPlayers]);
 
@@ -730,7 +791,8 @@ function ActivityTicker({ groupedPlayers }) {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState("ranking");
+  const [activeTab, setActiveTab] = useState(() => tabFromPathname(window.location.pathname));
+  const [consentChoice, setConsentChoice] = useState(() => localStorage.getItem(CONSENT_STORAGE_KEY) || "pending");
   const [players, setPlayers] = useState([]);
   const [activityFeed, setActivityFeed] = useState([]);
   const [activityFeedMeta, setActivityFeedMeta] = useState({
@@ -746,6 +808,10 @@ export default function App() {
   const [filterRole, setFilterRole] = useState("ALL");
   const [rankingMode, setRankingMode] = useState("combined");
   const [rankingQueueSort, setRankingQueueSort] = useState("soloq");
+  const [preferredPlatform, setPreferredPlatform] = useState(() => {
+    const saved = String(localStorage.getItem(PROFILE_PLATFORM_STORAGE_KEY) || "").trim();
+    return PROFILE_PLATFORM_OPTIONS.some((platform) => platform.key === saved) ? saved : "opgg";
+  });
   const [cacheMeta, setCacheMeta] = useState({
     cachedAt: null,
     cacheTtlMs: null,
@@ -757,6 +823,7 @@ export default function App() {
   const statusSignatureRef = useRef("");
   const activityFeedSeenKeysRef = useRef(new Set());
   const activityFeedSeededRef = useRef(false);
+  const sentMetricPathsRef = useRef(new Set());
 
   const loadLadder = useCallback(async (background = false) => {
     if (!background) setLoading(true);
@@ -785,6 +852,64 @@ export default function App() {
   useEffect(() => {
     loadLadder();
   }, [loadLadder]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      setActiveTab(tabFromPathname(window.location.pathname));
+    };
+
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  useEffect(() => {
+    const targetPath = pathFromTab(activeTab);
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState({}, "", targetPath);
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    localStorage.setItem(PROFILE_PLATFORM_STORAGE_KEY, preferredPlatform);
+  }, [preferredPlatform]);
+
+  const sendPageViewMetric = useCallback(async (targetPath) => {
+    if (consentChoice !== "accepted") return;
+    if (sentMetricPathsRef.current.has(targetPath)) return;
+
+    try {
+      await fetch(`${API}/api/metrics/page-view`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          consentAccepted: true,
+          pagePath: targetPath,
+          source: document.referrer || "direct",
+          language: navigator.language || "unknown",
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "unknown",
+          screen: `${window.screen?.width || 0}x${window.screen?.height || 0}`,
+        }),
+      });
+      sentMetricPathsRef.current.add(targetPath);
+    } catch {
+      // Silent: metrics must never break UX.
+    }
+  }, [consentChoice]);
+
+  useEffect(() => {
+    sendPageViewMetric(pathFromTab(activeTab));
+  }, [activeTab, sendPageViewMetric]);
+
+  const handleConsentDecision = useCallback((value) => {
+    const safeValue = value === "accepted" ? "accepted" : "rejected";
+    setConsentChoice(safeValue);
+    localStorage.setItem(CONSENT_STORAGE_KEY, safeValue);
+    if (safeValue === "accepted") {
+      sendPageViewMetric(pathFromTab(activeTab));
+    }
+  }, [activeTab, sendPageViewMetric]);
 
   const queueIncomingActivityPopups = useCallback((entries) => {
     const safeEntries = Array.isArray(entries) ? entries : [];
@@ -937,6 +1062,7 @@ export default function App() {
     return Array.from(groups.entries()).map(([owner, accounts]) => {
       const sortedByScore = [...accounts].sort((a, b) => getSoloqScore(b) - getSoloqScore(a));
       const bestSoloqAccount = sortedByScore[0] || null;
+      const inGameAccount = sortedByScore.find((a) => Boolean(a?.inGame)) || null;
       const primaryRiotId = bestSoloqAccount?.riotId || null;
       const mergedTopChampions = getTopChampionsFromAccounts(accounts);
 
@@ -958,6 +1084,8 @@ export default function App() {
           .slice(0, 2),
         altAccountsHiddenCount: Math.max(0, accounts.length - 1 - 2),
         accountCount: accounts.length,
+        inGame: accounts.some((a) => Boolean(a?.inGame)),
+        inGameRiotId: inGameAccount?.riotId || null,
         soloq: bestSoloqAccount?.soloq ? { ...bestSoloqAccount.soloq } : null,
       };
     });
@@ -998,6 +1126,8 @@ export default function App() {
           altAccounts: [],
           altAccountsHiddenCount: 0,
           accountCount: 1,
+          inGame: Boolean(player?.inGame),
+          inGameRiotId: player?.riotId || null,
           topChampions: Array.isArray(player?.topChampions) ? player.topChampions.slice(0, 3) : [],
         };
       });
@@ -1041,10 +1171,10 @@ export default function App() {
   }, [groupedPlayers]);
   const openOpggForPlayer = useCallback((player) => {
     const targetRiotId = player?.mainAccountRiotId || player?.riotId || null;
-    const opggUrl = buildOpggUrlFromRiotId(targetRiotId);
-    if (!opggUrl) return;
-    window.open(opggUrl, "_blank", "noopener,noreferrer");
-  }, []);
+    const profileUrl = getPreferredPlatformUrl(targetRiotId, preferredPlatform);
+    if (!profileUrl) return;
+    window.open(profileUrl, "_blank", "noopener,noreferrer");
+  }, [preferredPlatform]);
 
   const openOpggUrl = useCallback((url) => {
     if (!url) return;
@@ -1069,6 +1199,7 @@ export default function App() {
     };
     setRankingActivityPopup(previewEntry);
   }, [latestActivityEntry]);
+  const preferredPlatformLabel = PROFILE_PLATFORM_OPTIONS.find((platform) => platform.key === preferredPlatform)?.label || "OP.GG";
   const duelPlayers = duelConfig.map((owner) => groupedPlayersByOwner.get(owner.toLowerCase()) || null);
   const duelLpA = duelPlayers[0]?.soloq?.leaguePoints ?? null;
   const duelLpB = duelPlayers[1]?.soloq?.leaguePoints ?? null;
@@ -1163,21 +1294,21 @@ export default function App() {
           >
             {usersMasonryPlayers.map((player) => (
               (() => {
-                const tileOpggUrl = buildOpggUrlFromRiotId(player?.riotId);
+                const tileProfileUrl = getPreferredPlatformUrl(player?.riotId, preferredPlatform);
                 return (
                   <article
                     key={`${player.riotId}-${player.puuid || "no-puuid"}`}
-                    className={`summoner-tile ${tileOpggUrl ? "summoner-tile--clickable" : ""}`}
+                    className={`summoner-tile ${tileProfileUrl ? "summoner-tile--clickable" : ""}`}
                     style={{ minHeight: `${player.tileHeight}px` }}
-                    role={tileOpggUrl ? "button" : undefined}
-                    tabIndex={tileOpggUrl ? 0 : undefined}
-                    onClick={tileOpggUrl ? () => openOpggUrl(tileOpggUrl) : undefined}
-                    onKeyDown={tileOpggUrl ? (event) => {
+                    role={tileProfileUrl ? "button" : undefined}
+                    tabIndex={tileProfileUrl ? 0 : undefined}
+                    onClick={tileProfileUrl ? () => openOpggUrl(tileProfileUrl) : undefined}
+                    onKeyDown={tileProfileUrl ? (event) => {
                       if (event.key !== "Enter" && event.key !== " ") return;
                       event.preventDefault();
-                      openOpggUrl(tileOpggUrl);
+                      openOpggUrl(tileProfileUrl);
                     } : undefined}
-                    title={tileOpggUrl ? `Abrir op.gg: ${player.riotId}` : undefined}
+                    title={tileProfileUrl ? `Abrir ${preferredPlatformLabel}: ${player.riotId}` : undefined}
                   >
                 {player.profileIconId ? (
                   <img
@@ -1466,17 +1597,18 @@ export default function App() {
             <div className="ladder">
               {filteredPlayers.map((p) => {
                 const playerWarnings = buildPlayerWarnings(p);
-                const playerOpggUrl = buildOpggUrlFromRiotId(p.mainAccountRiotId || p.riotId);
+                const playerProfileUrl = getPreferredPlatformUrl(p.mainAccountRiotId || p.riotId, preferredPlatform);
+                const liveGameUrl = buildLeagueOfGraphsLiveUrlFromRiotId(p.inGameRiotId || p.mainAccountRiotId || p.riotId);
                 return (
                   <div
                     key={p.groupKey || p.riotId}
-                    className={`player-row ${playerOpggUrl ? "player-row--clickable" : ""} ${p.error ? "player-error" : ""} ${p._rank <= 3 ? `player-top player-top-${p._rank}` : "player-regular"}`}
+                    className={`player-row ${playerProfileUrl ? "player-row--clickable" : ""} ${p.error ? "player-error" : ""} ${p._rank <= 3 ? `player-top player-top-${p._rank}` : "player-regular"}`}
                     style={{ "--tier-color": TIER_COLORS[p.soloq?.tier] || "var(--line)" }}
-                    role={playerOpggUrl ? "button" : undefined}
-                    tabIndex={playerOpggUrl ? 0 : undefined}
-                    onClick={playerOpggUrl ? () => openOpggForPlayer(p) : undefined}
-                    onKeyDown={playerOpggUrl ? (event) => handleOpenOpggKeyDown(event, p) : undefined}
-                    title={playerOpggUrl ? `Abrir op.gg: ${p.mainAccountRiotId || p.riotId}` : undefined}
+                    role={playerProfileUrl ? "button" : undefined}
+                    tabIndex={playerProfileUrl ? 0 : undefined}
+                    onClick={playerProfileUrl ? () => openOpggForPlayer(p) : undefined}
+                    onKeyDown={playerProfileUrl ? (event) => handleOpenOpggKeyDown(event, p) : undefined}
+                    title={playerProfileUrl ? `Abrir ${preferredPlatformLabel}: ${p.mainAccountRiotId || p.riotId}` : undefined}
                   >
                     <span className="pos">{p._rank}</span>
 
@@ -1512,6 +1644,25 @@ export default function App() {
                               <img src={platform.icon} alt={platform.label} />
                             </button>
                           ))}
+                          {p.inGame && liveGameUrl && (
+                            <button
+                              type="button"
+                              className="live-game-chip"
+                              title="Abrir live game en LeagueOfGraphs"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                openOpggUrl(liveGameUrl);
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key !== "Enter" && event.key !== " ") return;
+                                event.preventDefault();
+                                event.stopPropagation();
+                                openOpggUrl(liveGameUrl);
+                              }}
+                            >
+                              IN GAME
+                            </button>
+                          )}
                         </div>
                         {p.accountCount > 1 && <span className="riot-alts">Cuenta top: {p.mainAccountRiotId || p.riotId}</span>}
                         {rankingMode === "all" && p.ownerRiotId && String(p.ownerRiotId).toLowerCase() !== String(p.riotId || "").toLowerCase() && (
@@ -1589,16 +1740,16 @@ export default function App() {
               <div className="empty">No hay jugadores en el ranking.</div>
             ) : (
               filteredPlayers.slice(0, 10).map((p) => {
-                const playerOpggUrl = buildOpggUrlFromRiotId(p.mainAccountRiotId || p.riotId);
+                const playerProfileUrl = getPreferredPlatformUrl(p.mainAccountRiotId || p.riotId, preferredPlatform);
                 return (
                   <div
                     key={p.groupKey || p.riotId}
-                    className={`hachita-card ${playerOpggUrl ? "hachita-card--clickable" : ""}`}
-                    role={playerOpggUrl ? "button" : undefined}
-                    tabIndex={playerOpggUrl ? 0 : undefined}
-                    onClick={playerOpggUrl ? () => openOpggForPlayer(p) : undefined}
-                    onKeyDown={playerOpggUrl ? (event) => handleOpenOpggKeyDown(event, p) : undefined}
-                    title={playerOpggUrl ? `Abrir op.gg: ${p.mainAccountRiotId || p.riotId}` : undefined}
+                    className={`hachita-card ${playerProfileUrl ? "hachita-card--clickable" : ""}`}
+                    role={playerProfileUrl ? "button" : undefined}
+                    tabIndex={playerProfileUrl ? 0 : undefined}
+                    onClick={playerProfileUrl ? () => openOpggForPlayer(p) : undefined}
+                    onKeyDown={playerProfileUrl ? (event) => handleOpenOpggKeyDown(event, p) : undefined}
+                    title={playerProfileUrl ? `Abrir ${preferredPlatformLabel}: ${p.mainAccountRiotId || p.riotId}` : undefined}
                   >
                     <div className="hachita-rank-badge">{p._rank}</div>
                     <div className="hachita-info">
@@ -1618,7 +1769,7 @@ export default function App() {
   );
 
   const infoContent = (
-    <div className="info-grid">
+    <div className="info-grid info-grid--technical">
       <section className="panel-section">
         <div className="section-heading">
           <div>
@@ -1651,16 +1802,82 @@ export default function App() {
       <section className="panel-section">
         <div className="section-heading">
           <div>
-            <p className="section-kicker">Aplicacion</p>
-            <h2>Como funciona</h2>
+            <p className="section-kicker">Tecnico</p>
+            <h2>Info tecnica</h2>
           </div>
         </div>
-        <p className="panel-copy">
-          Ranking de los pringados de Tullidos.
-        </p>
-        <p className="panel-copy">
-          El cliente esta hecho con React y el servidor usa Express para servir la API y consultar Riot.
-        </p>
+        <div className="info-list">
+          <div className="info-item">
+            <span className="info-label">Host actual</span>
+            <strong>{window.location.origin}</strong>
+          </div>
+          <div className="info-item">
+            <span className="info-label">Entorno</span>
+            <strong>{import.meta.env.DEV ? "development" : "production"}</strong>
+          </div>
+          <div className="info-item">
+            <span className="info-label">VITE_API_URL</span>
+            <strong>{RAW_API_ENV || "(no definida)"}</strong>
+          </div>
+          <div className="info-item">
+            <span className="info-label">API efectiva</span>
+            <strong>{API}</strong>
+          </div>
+          <div className="info-item">
+            <span className="info-label">Modo conexion API</span>
+            <strong>{API === window.location.origin ? "same-origin" : "cross-origin"}</strong>
+          </div>
+          <div className="info-item">
+            <span className="info-label">Guardia anti-localhost</span>
+            <strong>{SHOULD_IGNORE_LOCAL_API_IN_PROD ? "activo (localhost ignorado en prod)" : "no aplicada"}</strong>
+          </div>
+          <div className="info-item">
+            <span className="info-label">Rate limit Riot</span>
+            <strong>{apiStatus?.riotRateLimited ? `Activo (${apiStatus?.rateLimitSecondsLeft || 0}s)` : "Sin bloqueo"}</strong>
+          </div>
+          <div className="info-item">
+            <span className="info-label">Presupuesto API</span>
+            <strong>
+              1s: {Number(apiStatus?.budgetRemaining1s) || 0} · 2m: {Number(apiStatus?.budgetRemaining2min) || 0}
+            </strong>
+          </div>
+          <div className="info-item">
+            <span className="info-label">Requests Riot</span>
+            <strong>
+              hoy: {Number(apiStatus?.todayRequests) || 0} · total: {Number(apiStatus?.totalRequests) || 0}
+            </strong>
+          </div>
+          <div className="info-item">
+            <span className="info-label">Cache backend</span>
+            <strong>
+              players: {Number(apiStatus?.playersCached) || players.length} · raw: {Number(apiStatus?.rawDataCached) || 0}
+            </strong>
+          </div>
+          <div className="info-item">
+            <span className="info-label">Refresh en curso</span>
+            <strong>{apiStatus?.isRefreshing ? "Si" : "No"}</strong>
+          </div>
+          <div className="info-item">
+            <span className="info-label">Version DDragon</span>
+            <strong>{cacheMeta.ddragonVersion || "desconocida"}</strong>
+          </div>
+          <div className="info-item">
+            <span className="info-label">Consent analytics</span>
+            <strong>{consentChoice}</strong>
+          </div>
+          <div className="info-item">
+            <span className="info-label">Endpoints clave</span>
+            <strong>/api/ladder · /api/status · /api/activity-feed · /api/admin/metrics</strong>
+          </div>
+          <div className="info-item">
+            <span className="info-label">Stack</span>
+            <strong>React + Vite · Node + Express · Riot API</strong>
+          </div>
+          <div className="info-item">
+            <span className="info-label">lucas gay</span>
+            <strong>si</strong>
+          </div>
+        </div>
       </section>
     </div>
   );
@@ -1719,11 +1936,25 @@ export default function App() {
     </section>
   );
 
+  const adminContent = (
+    <AdminPanel
+      apiBase={API}
+      onRosterChanged={async () => {
+        await loadLadder(true);
+        await loadActivityFeed(true);
+      }}
+    />
+  );
+
+  const privacyContent = <PrivacyPage />;
+
   const tabContent = {
     ranking: rankingContent,
     activity: activityContent,
     hachitas: hachitasContent,
     users: usersContent,
+    admin: adminContent,
+    privacy: privacyContent,
     info: infoContent,
   };
 
@@ -1735,6 +1966,48 @@ export default function App() {
           {tabContent[activeTab]}
         </div>
       </div>
+
+      <div className="rank-platform-picker" role="group" aria-label="Elige plataforma favorita">
+        <span className="rank-platform-picker__label">Elige plataforma favorita</span>
+        <div className="rank-platform-picker__buttons">
+          {PROFILE_PLATFORM_OPTIONS.map((platform) => (
+            <button
+              key={platform.key}
+              type="button"
+              className={`rank-platform-btn ${preferredPlatform === platform.key ? "is-active" : ""}`}
+              onClick={() => setPreferredPlatform(platform.key)}
+              title={`Abrir jugador con ${platform.label}`}
+              aria-label={`Usar ${platform.label} como plataforma favorita`}
+              aria-pressed={preferredPlatform === platform.key}
+            >
+              <img src={platform.icon} alt={platform.label} loading="lazy" />
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {consentChoice === "pending" && (
+        <aside className="consent-banner" role="dialog" aria-live="polite" aria-label="Consentimiento de analitica">
+          <div className="consent-banner__text">
+            <strong>Privacidad y metricas</strong>
+            <p>
+              Usamos metrica anonima para saber desde donde se visita la web. Solo se registra si aceptas.
+              Puedes revisar los detalles en la seccion de Privacidad.
+            </p>
+          </div>
+          <div className="consent-banner__actions">
+            <button type="button" className="consent-banner__btn consent-banner__btn--accept" onClick={() => handleConsentDecision("accepted")}>
+              Aceptar
+            </button>
+            <button type="button" className="consent-banner__btn consent-banner__btn--reject" onClick={() => handleConsentDecision("rejected")}>
+              Rechazar
+            </button>
+            <button type="button" className="consent-banner__btn consent-banner__btn--link" onClick={() => setActiveTab("privacy")}>
+              Ver privacidad
+            </button>
+          </div>
+        </aside>
+      )}
     </AppLayout>
   );
 }
