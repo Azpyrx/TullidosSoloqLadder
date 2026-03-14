@@ -26,6 +26,7 @@ export default function AdminPanel({ apiBase, onRosterChanged }) {
     "Content-Type": "application/json",
     "x-admin-token": adminToken,
   }), [adminToken]);
+  const hasAdminToken = adminToken.trim().length > 0;
 
   const persistToken = useCallback((value) => {
     const safe = String(value || "").trim();
@@ -186,9 +187,11 @@ export default function AdminPanel({ apiBase, onRosterChanged }) {
             <button type="button" onClick={loadFriends} disabled={loadingFriends || saving}>
               {loadingFriends ? "Cargando..." : "Cargar jugadores"}
             </button>
-            <button type="button" className="admin-ghost" onClick={loadMetrics} disabled={loadingMetrics || saving}>
-              {loadingMetrics ? "Cargando..." : "Cargar metricas"}
-            </button>
+            {hasAdminToken && (
+              <button type="button" className="admin-ghost" onClick={loadMetrics} disabled={loadingMetrics || saving}>
+                {loadingMetrics ? "Cargando..." : "Cargar metricas"}
+              </button>
+            )}
           </div>
           <div className="admin-actions">
             <button type="button" className="admin-ghost" onClick={handleForceRefresh} disabled={saving || loadingFriends}>
@@ -248,61 +251,68 @@ export default function AdminPanel({ apiBase, onRosterChanged }) {
         </article>
       </div>
 
-      <article className="admin-card admin-card--metrics">
-        <h3>Metricas de visitas (anonimizadas)</h3>
-        <p>Solo se registran tras consentimiento y con IP anonimizada.</p>
-        {metrics ? (
-          <>
-            <div className="admin-metrics-summary">
-              <div>
-                <strong>Vistas consentidas</strong>
-                <span>{metrics?.totals?.consentedPageViews || 0}</span>
-              </div>
-              <div>
-                <strong>Total vistas guardadas</strong>
-                <span>{metrics?.totals?.pageViews || 0}</span>
-              </div>
-              <div>
-                <strong>Ultima actualizacion</strong>
-                <span>{metrics?.lastUpdatedAt ? new Date(metrics.lastUpdatedAt).toLocaleString() : "-"}</span>
-              </div>
-            </div>
-
-            <div className="admin-metrics-columns">
-              <div>
-                <h4>Paises top</h4>
-                <ul className="admin-mini-list">
-                  {(metrics.topCountries || []).map((item) => (
-                    <li key={item.country}>{item.country}: {item.views}</li>
-                  ))}
-                </ul>
-              </div>
-              <div>
-                <h4>Paginas top</h4>
-                <ul className="admin-mini-list">
-                  {(metrics.topPaths || []).map((item) => (
-                    <li key={item.path}>{item.path}: {item.views}</li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-
-            <h4>Ultimos eventos</h4>
-            <div className="admin-events">
-              {(metrics.recentEvents || []).slice(0, 30).map((event) => (
-                <div key={event.id} className="admin-event-row">
-                  <span>{event.at ? new Date(event.at).toLocaleString() : "-"}</span>
-                  <span>{event.country || "??"}</span>
-                  <span>{event.pagePath || "/"}</span>
-                  <span>{event.source || "direct"}</span>
+      {hasAdminToken ? (
+        <article className="admin-card admin-card--metrics">
+          <h3>Metricas de visitas (anonimizadas)</h3>
+          <p>Solo se registran tras consentimiento y con IP anonimizada.</p>
+          {metrics ? (
+            <>
+              <div className="admin-metrics-summary">
+                <div>
+                  <strong>Vistas consentidas</strong>
+                  <span>{metrics?.totals?.consentedPageViews || 0}</span>
                 </div>
-              ))}
-            </div>
-          </>
-        ) : (
-          <p className="admin-muted">Carga metricas para ver el panel.</p>
-        )}
-      </article>
+                <div>
+                  <strong>Total vistas guardadas</strong>
+                  <span>{metrics?.totals?.pageViews || 0}</span>
+                </div>
+                <div>
+                  <strong>Ultima actualizacion</strong>
+                  <span>{metrics?.lastUpdatedAt ? new Date(metrics.lastUpdatedAt).toLocaleString() : "-"}</span>
+                </div>
+              </div>
+
+              <div className="admin-metrics-columns">
+                <div>
+                  <h4>Paises top</h4>
+                  <ul className="admin-mini-list">
+                    {(metrics.topCountries || []).map((item) => (
+                      <li key={item.country}>{item.country}: {item.views}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <h4>Paginas top</h4>
+                  <ul className="admin-mini-list">
+                    {(metrics.topPaths || []).map((item) => (
+                      <li key={item.path}>{item.path}: {item.views}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+
+              <h4>Ultimos eventos</h4>
+              <div className="admin-events">
+                {(metrics.recentEvents || []).slice(0, 30).map((event) => (
+                  <div key={event.id} className="admin-event-row">
+                    <span>{event.at ? new Date(event.at).toLocaleString() : "-"}</span>
+                    <span>{event.country || "??"}</span>
+                    <span>{event.pagePath || "/"}</span>
+                    <span>{event.source || "direct"}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <p className="admin-muted">Carga metricas para ver el panel.</p>
+          )}
+        </article>
+      ) : (
+        <article className="admin-card admin-card--metrics">
+          <h3>Metricas de visitas (anonimizadas)</h3>
+          <p className="admin-muted">Oculto hasta introducir token admin.</p>
+        </article>
+      )}
 
       {error && <p className="admin-message admin-message--error">{error}</p>}
       {notice && <p className="admin-message admin-message--ok">{notice}</p>}

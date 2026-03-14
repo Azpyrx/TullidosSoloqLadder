@@ -32,7 +32,7 @@ export default function AppLayout({ onTabChange, activeTab, children }) {
         logoAlt="Tullidos"
       />
       <div className="page-content">{children}</div>
-      {!["users", "admin", "privacy"].includes(activeTab) && <FooterCarousel />}
+      {! ["users", "admin"].includes(activeTab) && <FooterCarousel />}
     </>
   );
 }
