@@ -1967,7 +1967,11 @@ export default function App() {
         </div>
       </div>
 
-      <div className="rank-platform-picker" role="group" aria-label="Elige plataforma favorita">
+      <div
+        className={`rank-platform-picker ${consentChoice === "pending" ? "rank-platform-picker--with-consent" : ""}`}
+        role="group"
+        aria-label="Elige plataforma favorita"
+      >
         <span className="rank-platform-picker__label">Elige plataforma favorita</span>
         <div className="rank-platform-picker__buttons">
           {PROFILE_PLATFORM_OPTIONS.map((platform) => (

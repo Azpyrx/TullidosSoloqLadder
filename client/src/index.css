@@ -1155,6 +1155,10 @@ button:disabled {
   backdrop-filter: blur(6px);
 }
 
+.rank-platform-picker--with-consent {
+  bottom: max(122px, calc(env(safe-area-inset-bottom) + 122px));
+}
+
 .rank-platform-picker__label {
   font-size: 14px;
   font-weight: 800;
@@ -3477,6 +3481,10 @@ button:disabled {
 
   .privacy-retention__row {
     grid-template-columns: 1fr;
+  }
+
+  .rank-platform-picker--with-consent {
+    bottom: max(190px, calc(env(safe-area-inset-bottom) + 190px));
   }
 }
 
