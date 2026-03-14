@@ -3245,7 +3245,7 @@ button:disabled {
 
 .admin-metrics-columns {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 14px;
 }
@@ -3268,7 +3268,7 @@ button:disabled {
 
 .admin-event-row {
   display: grid;
-  grid-template-columns: 180px 60px 1fr 1fr;
+  grid-template-columns: 180px 60px 120px 1fr 1fr;
   gap: 8px;
   padding: 7px 10px;
   border-bottom: 1px solid rgba(132, 187, 250, 0.15);

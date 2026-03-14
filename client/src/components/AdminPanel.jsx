@@ -251,7 +251,7 @@ export default function AdminPanel({ apiBase, onRosterChanged }) {
         </article>
       </div>
 
-      {hasAdminToken ? (
+      {hasAdminToken && (
         <article className="admin-card admin-card--metrics">
           <h3>Metricas de visitas (anonimizadas)</h3>
           <p>Solo se registran tras consentimiento y con IP anonimizada.</p>
@@ -282,6 +282,14 @@ export default function AdminPanel({ apiBase, onRosterChanged }) {
                   </ul>
                 </div>
                 <div>
+                  <h4>Ciudades top</h4>
+                  <ul className="admin-mini-list">
+                    {(metrics.topCities || []).map((item) => (
+                      <li key={item.city}>{item.city}: {item.views}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
                   <h4>Paginas top</h4>
                   <ul className="admin-mini-list">
                     {(metrics.topPaths || []).map((item) => (
@@ -297,6 +305,7 @@ export default function AdminPanel({ apiBase, onRosterChanged }) {
                   <div key={event.id} className="admin-event-row">
                     <span>{event.at ? new Date(event.at).toLocaleString() : "-"}</span>
                     <span>{event.country || "??"}</span>
+                    <span>{event.city || "unknown"}</span>
                     <span>{event.pagePath || "/"}</span>
                     <span>{event.source || "direct"}</span>
                   </div>
@@ -306,11 +315,6 @@ export default function AdminPanel({ apiBase, onRosterChanged }) {
           ) : (
             <p className="admin-muted">Carga metricas para ver el panel.</p>
           )}
-        </article>
-      ) : (
-        <article className="admin-card admin-card--metrics">
-          <h3>Metricas de visitas (anonimizadas)</h3>
-          <p className="admin-muted">Oculto hasta introducir token admin.</p>
         </article>
       )}
 

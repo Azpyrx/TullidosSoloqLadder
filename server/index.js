@@ -1952,15 +1952,18 @@ app.post("/api/metrics/page-view", (req, res) => {
 app.get("/api/admin/metrics", requireAdmin, (req, res) => {
   const days = {};
   const byCountry = {};
+  const byCity = {};
   const byPath = {};
 
   for (const event of visitMetrics.events) {
     const day = String(event?.at || "").slice(0, 10) || "unknown";
     const country = String(event?.country || "unknown").toUpperCase();
+    const city = String(event?.city || "unknown").trim() || "unknown";
     const pathValue = String(event?.pagePath || "/");
 
     days[day] = (days[day] || 0) + 1;
     byCountry[country] = (byCountry[country] || 0) + 1;
+    byCity[city] = (byCity[city] || 0) + 1;
     byPath[pathValue] = (byPath[pathValue] || 0) + 1;
   }
 
@@ -1974,6 +1977,11 @@ app.get("/api/admin/metrics", requireAdmin, (req, res) => {
     .slice(0, 10)
     .map(([pathValue, views]) => ({ path: pathValue, views }));
 
+  const topCities = Object.entries(byCity)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([city, views]) => ({ city, views }));
+
   return res.json({
     ok: true,
     totals: {
@@ -1983,6 +1991,7 @@ app.get("/api/admin/metrics", requireAdmin, (req, res) => {
     lastUpdatedAt: visitMetrics.lastUpdatedAt,
     viewsByDay: days,
     topCountries,
+    topCities,
     topPaths,
     recentEvents: visitMetrics.events.slice(-120).reverse(),
   });
