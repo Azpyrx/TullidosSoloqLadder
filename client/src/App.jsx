@@ -1982,7 +1982,7 @@ export default function App() {
           <div className="info-item">
             <span className="info-label">Presupuesto API</span>
             <strong>
-              1s: {Number(apiStatus?.budgetRemaining1s) || 0} · 2m: {Number(apiStatus?.budgetRemaining2min) || 0}
+              1s: {Number(apiStatus?.budgetRemaining1s) || 0} · 1m: {Number(apiStatus?.budgetRemaining1m) || 0}
             </strong>
           </div>
           <div className="info-item">

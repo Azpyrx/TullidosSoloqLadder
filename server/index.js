@@ -67,17 +67,20 @@ const ACTIVITY_FEED_SCHEMA_VERSION = 3;
 const DELTA_TRACKING_VERSION = 3;
 const MAX_VISIT_METRICS_EVENTS = Math.max(200, Number(process.env.MAX_VISIT_METRICS_EVENTS) || 3000);
 
-// Riot personal key hard limits: 20 req/1 s, 100 req/2 min.
-// We budget to 18/1 s and 2000/2 min (general limit requested) for a safety margin.
+// Riot personal key hard limits: 20 req/1 s, 100 req/1 min.
+// Enforce those limits and prioritize ladder updates over in-game/spectator calls.
 const RATE_WINDOW_LIMITS = [
-  { count: 18, windowMs: 1_000 },
-  { count: 2000, windowMs: 120_000 },
+  { count: 20, windowMs: 1_000 },
+  { count: 100, windowMs: 60_000 },
 ];
+const REQUEST_PRIORITY = { LADDER: 1, IN_GAME: 2 };
 const requestTimestamps = []; // sorted epoch-ms of every dispatched Riot request
 let totalRiotRequests = 0;
 let todayRiotRequests = 0;
 let riotRateLimitedUntil = 0; // set reactively when a 429 is received
 let lastApiStatsPersistAt = 0;
+const riotRequestQueue = [];
+let riotQueueProcessing = false;
 
 const visitMetrics = {
   totalPageViews: 0,
@@ -1126,8 +1129,8 @@ function loadCacheFromFile() {
 // Proactive sliding-window rate limiter.
 // Waits the minimum time needed so neither budget window is exceeded.
 async function waitForRateLimit() {
-  // Prune timestamps older than the widest window (2 min).
-  const horizon = Date.now() - 120_000;
+  // Prune timestamps older than the widest window (1 min).
+  const horizon = Date.now() - 60_000;
   while (requestTimestamps.length > 0 && requestTimestamps[0] < horizon) requestTimestamps.shift();
 
   let waitUntil = Date.now();
@@ -1143,7 +1146,7 @@ async function waitForRateLimit() {
   const delay = waitUntil - Date.now();
   if (delay > 0) {
     console.log(
-      `[RATE] Throttling ${delay} ms — window: ${requestTimestamps.length} req in last 2 min`
+      `[RATE] Throttling ${delay} ms — window: ${requestTimestamps.length} req in last ${RATE_WINDOW_LIMITS.slice(-1)[0].windowMs / 1000} s`
     );
     await new Promise((r) => setTimeout(r, delay));
   }
@@ -1154,8 +1157,40 @@ async function waitForRateLimit() {
   saveApiStatsToFile(false);
 }
 
-async function riotFetch(baseUrl, options = {}) {
+function getNextQueuedRequestIndex() {
+  let bestIndex = 0;
+  for (let i = 1; i < riotRequestQueue.length; i += 1) {
+    const a = riotRequestQueue[i];
+    const b = riotRequestQueue[bestIndex];
+    if (a.priority < b.priority || (a.priority === b.priority && a.createdAt < b.createdAt)) {
+      bestIndex = i;
+    }
+  }
+  return bestIndex;
+}
+
+async function processRiotQueue() {
+  if (riotQueueProcessing) return;
+  riotQueueProcessing = true;
+  try {
+    while (riotRequestQueue.length > 0) {
+      const idx = getNextQueuedRequestIndex();
+      const { baseUrl, options, resolve, reject } = riotRequestQueue.splice(idx, 1)[0];
+      try {
+        const result = await doRiotFetch(baseUrl, options);
+        resolve(result);
+      } catch (err) {
+        reject(err);
+      }
+    }
+  } finally {
+    riotQueueProcessing = false;
+  }
+}
+
+async function doRiotFetch(baseUrl, options = {}) {
   const { bypassRateLimited = false } = options || {};
+
   // Reactive: hard block when a 429 was received (unless bypass requested).
   if (Date.now() < riotRateLimitedUntil && !bypassRateLimited) {
     const waitSeconds = Math.ceil((riotRateLimitedUntil - Date.now()) / 1000);
@@ -1186,6 +1221,16 @@ async function riotFetch(baseUrl, options = {}) {
       : RATE_LIMIT_FALLBACK_MS;
     riotRateLimitedUntil = Date.now() + retryMs;
 
+    // When rate-limited, prefer serving from cache and try to refresh again after the cooldown.
+    // If a refresh is already in flight, this will just be absorbed by the existing queue.
+    setTimeout(() => {
+      if (!ladderCache.refreshPromise) {
+        refreshLadderCache().catch((error) => {
+          console.error("ERROR refreshing ladder cache after rate limit:", error.message);
+        });
+      }
+    }, retryMs + 1000);
+
     const err = new Error("Riot API rate limit exceeded");
     err.code = "RATE_LIMITED";
     err.retryAfterMs = retryMs;
@@ -1196,6 +1241,21 @@ async function riotFetch(baseUrl, options = {}) {
     throw new Error(`Riot API ${response.status}: ${text || response.statusText}`);
   }
   return text ? JSON.parse(text) : null;
+}
+
+async function riotFetch(baseUrl, options = {}) {
+  const { priority = REQUEST_PRIORITY.LADDER } = options || {};
+  return new Promise((resolve, reject) => {
+    riotRequestQueue.push({
+      baseUrl,
+      options,
+      priority,
+      createdAt: Date.now(),
+      resolve,
+      reject,
+    });
+    processRiotQueue();
+  });
 }
 
 function getPreviousPlayerFallback(friend, previousByPuuid, previousByRiotId) {
@@ -1297,7 +1357,7 @@ async function fetchActiveGameStatusWithCache(puuid, encryptedSummonerId, force 
   try {
     const activeGame = await riotFetch(
       `https://${PLATFORM}.api.riotgames.com/lol/spectator/v5/active-games/by-summoner/${encodeURIComponent(encryptedSummonerId)}`,
-      { bypassRateLimited: true }
+      { priority: REQUEST_PRIORITY.IN_GAME }
     );
     console.log("Respuesta spectator-v5:", JSON.stringify(activeGame));
 
@@ -1892,6 +1952,26 @@ app.get("/api/ladder", async (req, res) => {
   }
 
   try {
+    // If Riot is currently rate-limited, serve the last cached ladder snapshot immediately.
+    if (Date.now() < riotRateLimitedUntil && ladderCache.players.length > 0) {
+      let friendsForEmotes = [];
+      try {
+        friendsForEmotes = readFriends();
+      } catch {
+        friendsForEmotes = [];
+      }
+      const playersWithMetadata = applyFriendMetadataToPlayers(ladderCache.players, friendsForEmotes);
+      return res.json({
+        players: playersWithMetadata,
+        cachedAt: ladderCache.lastUpdatedAt,
+        cacheTtlMs: LADDER_CACHE_TTL_MS,
+        stale: true,
+        lastError: "Riot rate limit active",
+        rateLimitedUntil: new Date(riotRateLimitedUntil).toISOString(),
+        ddragonVersion: DDRAGON_VERSION,
+      });
+    }
+
     let friendsForEmotes = [];
     try {
       friendsForEmotes = readFriends();
@@ -2213,20 +2293,20 @@ app.get("/api/status", (req, res) => {
   const rateLimitSecondsLeft = riotRateLimitedUntil > now
     ? Math.ceil((riotRateLimitedUntil - now) / 1000) : 0;
   const horizon1s = now - 1_000;
-  const horizon2min = now - 120_000;
+  const horizon1m = now - 60_000;
   const req1s = requestTimestamps.filter(t => t > horizon1s).length;
-  const req2min = requestTimestamps.filter(t => t > horizon2min).length;
+  const req1m = requestTimestamps.filter(t => t > horizon1m).length;
   res.json({
     ok: true,
     riotRateLimited: riotRateLimitedUntil > now,
     riotRateLimitedUntil,
     rateLimitSecondsLeft,
     recentRequests1s: req1s,
-    recentRequests2min: req2min,
+    recentRequests1m: req1m,
     totalRequests: totalRiotRequests,
     todayRequests: todayRiotRequests,
-    budgetRemaining1s: Math.max(0, 18 - req1s),
-    budgetRemaining2min: Math.max(0, 2000 - req2min),
+    budgetRemaining1s: Math.max(0, 20 - req1s),
+    budgetRemaining1m: Math.max(0, 100 - req1m),
     refreshCursor: ladderCache.refreshCursor,
     playersCached: Object.keys(ladderCache.playerSnapshotByKey).length,
     rawDataCached: Object.keys(ladderCache.rawDataByPuuid).length,
@@ -2414,7 +2494,7 @@ async function pollFriendsLiveGames() {
           const nameOnly = riotId.split('#')[0];
           const sByName = await riotFetch(
             `https://${PLATFORM}.api.riotgames.com/lol/summoner/v4/summoners/by-name/${encodeURIComponent(nameOnly)}`,
-            { bypassRateLimited: true }
+            { priority: REQUEST_PRIORITY.IN_GAME }
           );
           encryptedSummonerId = sByName?.id || null;
         } catch (e) {
@@ -2499,7 +2579,7 @@ async function pollSpectatorForFriends() {
       try {
         const active = await riotFetch(
           `https://${PLATFORM}.api.riotgames.com/lol/spectator/v5/active-games/by-summoner/${encodeURIComponent(puuid)}`,
-          { bypassRateLimited: true }
+          { priority: REQUEST_PRIORITY.IN_GAME }
         );
         liveGamesCache.liveGames[puuid] = {
           lastCheckedAt: new Date().toISOString(),
