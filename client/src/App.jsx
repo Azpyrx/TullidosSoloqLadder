@@ -271,34 +271,6 @@ function buildLeagueOfGraphsUrlFromRiotId(riotId) {
   return `https://www.leagueofgraphs.com/summoner/euw/${encodeURIComponent(gameName)}-${encodeURIComponent(tagLine)}`;
 }
 
-function buildLeagueOfGraphsLiveUrlFromRiotId(riotId) {
-  const raw = String(riotId || "").trim();
-  if (!raw || !raw.includes("#")) return null;
-  const [gameNameRaw, tagLineRaw] = raw.split("#");
-  const gameName = String(gameNameRaw || "").trim();
-  const tagLine = String(tagLineRaw || "").trim();
-  if (!gameName || !tagLine) return null;
-  return `https://www.leagueofgraphs.com/summoner/euw/${encodeURIComponent(gameName)}-${encodeURIComponent(tagLine)}/live-game`;
-}
-
-function buildPorofessorLiveUrlFromRiotId(riotId) {
-  const raw = String(riotId || "").trim();
-  if (!raw || !raw.includes("#")) return null;
-  const [gameNameRaw, tagLineRaw] = raw.split("#");
-  const gameName = String(gameNameRaw || "").trim();
-  const tagLine = String(tagLineRaw || "").trim();
-  if (!gameName || !tagLine) return null;
-  // Porofessor expects Riot ID with dash, not hash
-  return `https://porofessor.gg/live/euw/${encodeURIComponent(gameName)}-${encodeURIComponent(tagLine)}`;
-}
-
-function buildLeagueOfGraphsMatchUrlFromGameId(gameId) {
-  const raw = String(gameId || "").trim();
-  if (!raw) return null;
-  const normalizedGameId = raw.includes("_") ? raw.split("_").pop() : raw;
-  return `https://www.leagueofgraphs.com/match/euw/${encodeURIComponent(normalizedGameId)}`;
-}
-
 function buildDeeplolUrlFromRiotId(riotId) {
   const raw = String(riotId || "").trim();
   if (!raw || !raw.includes("#")) return null;
@@ -307,6 +279,12 @@ function buildDeeplolUrlFromRiotId(riotId) {
   const tagLine = String(tagLineRaw || "").trim();
   if (!gameName || !tagLine) return null;
   return `https://www.deeplol.gg/summoner/euw/${encodeURIComponent(gameName)}-${encodeURIComponent(tagLine)}`;
+}
+
+function buildDeeplolInGameUrlFromRiotId(riotId) {
+  const base = buildDeeplolUrlFromRiotId(riotId);
+  if (!base) return null;
+  return `${base}/ingame`;
 }
 
 function buildDpmLolUrlFromRiotId(riotId) {
@@ -885,8 +863,8 @@ export default function App() {
             });
           });
         }
-      } catch (err) {
-        // silent
+      } catch {
+        // Silent: live games cache is a best-effort enhancement.
       }
       if (!Array.isArray(data)) {
         setCacheMeta({
@@ -943,8 +921,8 @@ export default function App() {
             return p;
           });
         });
-      } catch (err) {
-        // silent
+      } catch {
+        // Silent: live games cache is a best-effort enhancement.
       }
     }
 
@@ -1710,15 +1688,12 @@ export default function App() {
               {filteredPlayers.map((p) => {
                 const playerWarnings = buildPlayerWarnings(p);
                 const playerProfileUrl = getPreferredPlatformUrl(p.mainAccountRiotId || p.riotId, preferredPlatform);
-                const matchId = p?.activeGameStatus?.gameId || null;
-                const matchUrl = matchId ? buildLeagueOfGraphsMatchUrlFromGameId(matchId) : null;
-                const riotUrl = buildLeagueOfGraphsLiveUrlFromRiotId(p.inGameRiotId || p.mainAccountRiotId || p.riotId);
-                const poroUrl = p.liveGameCached ? buildPorofessorLiveUrlFromRiotId(p.inGameRiotId || p.mainAccountRiotId || p.riotId) : null;
-                const liveGameUrl = matchUrl || poroUrl || riotUrl || null;
+                const deeplolInGameUrl = p.liveGameCached ? buildDeeplolInGameUrlFromRiotId(p.inGameRiotId || p.mainAccountRiotId || p.riotId) : null;
+                const liveGameUrl = deeplolInGameUrl;
                 // Show chip if we know the player is in-game (from cache or live fetch)
                 const showInGameChip = Boolean(p.liveGameCached);
                 const showRiotIdRow = shouldRenderRiotId(p.emote, p.riotId) || showInGameChip;
-                const inGameChipTitle = liveGameUrl ? "Abrir live game en LeagueOfGraphs" : "Jugador está in game";
+                const inGameChipTitle = liveGameUrl ? "Abrir live game en Deeplol" : "Jugador está in game";
                 return (
                   <div
                     key={p.groupKey || p.riotId}

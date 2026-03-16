@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { motion, AnimatePresence } from "motion/react";
+import { motion as _motion, AnimatePresence } from "motion/react";
 import "./FooterCarousel.css";
 
 const DDRAGON = "https://ddragon.leagueoflegends.com/cdn/img/champion/splash";
@@ -51,7 +51,7 @@ export default function FooterCarousel() {
     <footer className="fc">
       <div className="fc__track">
         <AnimatePresence custom={dir} initial={false}>
-          <motion.div
+          <_motion.div
             key={slide.key}
             className="fc__slide"
             custom={dir}
@@ -65,7 +65,7 @@ export default function FooterCarousel() {
             }}
           >
             <div className="fc__overlay" />
-          </motion.div>
+          </_motion.div>
         </AnimatePresence>
       </div>
 
