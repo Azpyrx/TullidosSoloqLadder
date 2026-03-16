@@ -4,6 +4,31 @@ const dotenv = require("dotenv");
 const fs = require("fs");
 const path = require("path");
 
+// Cache global para partidas en vivo (persistente)
+const LIVE_GAMES_CACHE_FILE = path.join(__dirname, "live-games-cache.json");
+let liveGamesCache = { liveGames: {} };
+
+function loadLiveGamesCache() {
+  try {
+    if (fs.existsSync(LIVE_GAMES_CACHE_FILE)) {
+      liveGamesCache = JSON.parse(fs.readFileSync(LIVE_GAMES_CACHE_FILE, "utf8"));
+    }
+  } catch (err) {
+    console.warn("Could not load live games cache:", err.message);
+    liveGamesCache = { liveGames: {} };
+  }
+}
+
+function saveLiveGamesCache() {
+  try {
+    fs.writeFileSync(LIVE_GAMES_CACHE_FILE, JSON.stringify(liveGamesCache, null, 2));
+  } catch (err) {
+    console.warn("Could not save live games cache:", err.message);
+  }
+}
+
+loadLiveGamesCache();
+
 dotenv.config({ path: path.join(__dirname, ".env") });
 
 const app = express();
@@ -43,10 +68,10 @@ const DELTA_TRACKING_VERSION = 3;
 const MAX_VISIT_METRICS_EVENTS = Math.max(200, Number(process.env.MAX_VISIT_METRICS_EVENTS) || 3000);
 
 // Riot personal key hard limits: 20 req/1 s, 100 req/2 min.
-// We budget to 18/1 s and 90/2 min for a safety margin.
+// We budget to 18/1 s and 2000/2 min (general limit requested) for a safety margin.
 const RATE_WINDOW_LIMITS = [
   { count: 18, windowMs: 1_000 },
-  { count: 90, windowMs: 120_000 },
+  { count: 2000, windowMs: 120_000 },
 ];
 const requestTimestamps = []; // sorted epoch-ms of every dispatched Riot request
 let totalRiotRequests = 0;
@@ -1129,17 +1154,20 @@ async function waitForRateLimit() {
   saveApiStatsToFile(false);
 }
 
-async function riotFetch(baseUrl) {
-  // Reactive: hard block when a 429 was received.
-  if (Date.now() < riotRateLimitedUntil) {
+async function riotFetch(baseUrl, options = {}) {
+  const { bypassRateLimited = false } = options || {};
+  // Reactive: hard block when a 429 was received (unless bypass requested).
+  if (Date.now() < riotRateLimitedUntil && !bypassRateLimited) {
     const waitSeconds = Math.ceil((riotRateLimitedUntil - Date.now()) / 1000);
     const err = new Error(`Rate limit activo, reintentando en ${waitSeconds}s`);
     err.code = "RATE_LIMITED";
     throw err;
   }
 
-  // Proactive: sliding-window throttle — never exceeds 18/1 s or 90/2 min.
-  await waitForRateLimit();
+  // Proactive: sliding-window throttle — never exceeds configured windows.
+  if (!bypassRateLimited) {
+    await waitForRateLimit();
+  }
 
   const response = await fetch(baseUrl, {
     method: "GET",
@@ -1205,7 +1233,9 @@ function isCacheFresh(lastIso, ttlMs) {
 async function fetchSummonerWithCache(puuid) {
   const cachedRaw = ladderCache.rawDataByPuuid[puuid];
   const cachedSummoner = cachedRaw?.summoner;
-  if (cachedSummoner && isCacheFresh(cachedRaw?.lastSummonerAt, SUMMONER_REFRESH_TTL_MS)) {
+  // If we have a cached summoner and it's fresh and contains an encrypted id, use it.
+  // If cachedSummoner.id is missing, force a re-fetch even if the cache timestamp is fresh.
+  if (cachedSummoner && isCacheFresh(cachedRaw?.lastSummonerAt, SUMMONER_REFRESH_TTL_MS) && cachedSummoner.id) {
     return cachedSummoner;
   }
 
@@ -1236,12 +1266,19 @@ function isRiot404Error(err) {
   return msg.includes("Riot API 404");
 }
 
-async function fetchActiveGameStatusWithCache(puuid, encryptedSummonerId) {
+async function fetchActiveGameStatusWithCache(puuid, encryptedSummonerId, force = false) {
   const raw = ladderCache.rawDataByPuuid[puuid] || (ladderCache.rawDataByPuuid[puuid] = {});
   const cached = raw.activeGameStatus;
-
-  if (cached && isCacheFresh(cached.lastCheckedAt, ACTIVE_GAME_STATUS_TTL_MS)) {
-    return cached;
+  if (!force && cached && isCacheFresh(cached.lastCheckedAt, ACTIVE_GAME_STATUS_TTL_MS)) {
+      // Si el juego sigue en vivo, actualiza el liveGamesCache (puuid key)
+      if (cached.inGame && cached.gameId) {
+        liveGamesCache.liveGames[puuid] = {
+          puuid,
+          gameId: cached.gameId,
+      };
+      saveLiveGamesCache();
+    }
+    return { ...cached, fetchedLive: false };
   }
 
   if (!encryptedSummonerId) {
@@ -1259,8 +1296,10 @@ async function fetchActiveGameStatusWithCache(puuid, encryptedSummonerId) {
 
   try {
     const activeGame = await riotFetch(
-      `https://${PLATFORM}.api.riotgames.com/lol/spectator/v5/active-games/by-summoner/${encodeURIComponent(encryptedSummonerId)}`
+      `https://${PLATFORM}.api.riotgames.com/lol/spectator/v5/active-games/by-summoner/${encodeURIComponent(encryptedSummonerId)}`,
+      { bypassRateLimited: true }
     );
+    console.log("Respuesta spectator-v5:", JSON.stringify(activeGame));
 
     const next = {
       inGame: Boolean(activeGame?.gameId),
@@ -1275,10 +1314,22 @@ async function fetchActiveGameStatusWithCache(puuid, encryptedSummonerId) {
       lastCheckedAt: new Date().toISOString(),
     };
 
+    // Si está en partida, guarda en liveGamesCache
+    if (next.inGame && next.gameId) {
+      liveGamesCache.liveGames[puuid] = {
+        puuid,
+        gameId: next.gameId,
+        lastCheckedAt: next.lastCheckedAt,
+      };
+      saveLiveGamesCache();
+    }
     raw.activeGameStatus = next;
-    return next;
+    return { ...next, fetchedLive: true };
   } catch (err) {
     if (isRiot404Error(err)) {
+      // Si la partida terminó, elimina del liveGamesCache
+      delete liveGamesCache.liveGames[puuid];
+      saveLiveGamesCache();
       const next = {
         inGame: false,
         gameId: null,
@@ -1288,12 +1339,12 @@ async function fetchActiveGameStatusWithCache(puuid, encryptedSummonerId) {
         lastCheckedAt: new Date().toISOString(),
       };
       raw.activeGameStatus = next;
-      return next;
+      return { ...next, fetchedLive: true };
     }
 
     if (cached) {
       console.log(`[CACHE] active game fallback for ${puuid.slice(0, 8)}…`);
-      return cached;
+      return { ...cached, fetchedLive: false };
     }
 
     return {
@@ -1303,6 +1354,7 @@ async function fetchActiveGameStatusWithCache(puuid, encryptedSummonerId) {
       gameQueueConfigId: null,
       gameStartTime: null,
       lastCheckedAt: new Date().toISOString(),
+      fetchedLive: false,
     };
   }
 }
@@ -1366,16 +1418,25 @@ async function fetchPlayerDataFromAccount(account, fallback = {}) {
   const raw = ladderCache.rawDataByPuuid[account.puuid] || (ladderCache.rawDataByPuuid[account.puuid] = {});
   raw.account = { gameName: account.gameName || fallback.gameName, tagLine: account.tagLine || fallback.tagLine, puuid: account.puuid };
 
+  // Normaliza riotId y evita valores por defecto inválidos
+  const gameName = account.gameName || fallback.gameName;
+  const tagLine = account.tagLine || fallback.tagLine;
+  const riotId = (gameName && tagLine) ? `${gameName}#${tagLine}` : null;
+  // Si el jugador está en liveGamesCache, forzar inGame a true
+  let inGame = Boolean(activeGameStatus?.inGame);
+  if (!inGame && riotId) {
+    inGame = Object.values(liveGamesCache.liveGames).some((g) => g.puuid === account.puuid);
+  }
   return {
-    riotId: `${account.gameName || fallback.gameName || "Unknown"}#${account.tagLine || fallback.tagLine || "TAG"}`,
-    gameName: account.gameName || fallback.gameName || "Unknown",
-    tagLine: account.tagLine || fallback.tagLine || "TAG",
+    riotId,
+    gameName: gameName || "Unknown",
+    tagLine: tagLine || "TAG",
     puuid: account.puuid,
     profileIconId: summoner.profileIconId,
     summonerLevel: summoner.summonerLevel,
     soloq,
     flex,
-    inGame: Boolean(activeGameStatus?.inGame),
+    inGame,
     activeGameStatus,
     topChampions,
     mainRole,
@@ -1844,7 +1905,87 @@ app.get("/api/ladder", async (req, res) => {
       await refreshLadderCache();
     }
 
-    const playersWithMetadata = applyFriendMetadataToPlayers(ladderCache.players, friendsForEmotes);
+    // Refrescar el estado inGame de todos los jugadores antes de responder, cacheando en live-games-cache.json
+    const now = Date.now();
+    const updatedPlayers = await Promise.all(
+      ladderCache.players.map(async (player) => {
+        try {
+          // Si hay un valor fresco en liveGamesCache, úsalo
+          let cachedLive = null;
+          let cachedGameId = null;
+          for (const gameId in liveGamesCache.liveGames) {
+            const entry = liveGamesCache.liveGames[gameId];
+            if (entry.puuid === player.puuid) {
+              cachedLive = {
+                inGame: true,
+                gameId,
+                lastCheckedAt: entry.lastCheckedAt,
+              };
+              cachedGameId = gameId;
+              break;
+            }
+          }
+          if (cachedLive) {
+            // Verificamos en vivo antes de borrar el cache: solo borrar si la comprobación fue en vivo
+            const summoner = await fetchSummonerWithCache(player.puuid);
+            const activeGameStatus = await fetchActiveGameStatusWithCache(player.puuid, summoner?.id || null, true);
+            if (!activeGameStatus?.inGame && cachedGameId) {
+              if (activeGameStatus.fetchedLive) {
+                delete liveGamesCache.liveGames[cachedGameId];
+                saveLiveGamesCache();
+                return {
+                  ...player,
+                  inGame: false,
+                  activeGameStatus,
+                };
+              }
+              // No confirmar en vivo -> mantener el cache hasta la próxima verificación
+              return {
+                ...player,
+                inGame: true,
+                activeGameStatus: cachedLive,
+              };
+            }
+            return {
+              ...player,
+              inGame: true,
+              activeGameStatus: cachedLive,
+            };
+          }
+          // Si no hay valor fresco, consulta y actualiza el cache
+          const summoner = await fetchSummonerWithCache(player.puuid);
+          const activeGameStatus = await fetchActiveGameStatusWithCache(player.puuid, summoner?.id || null);
+          // Si está en partida, actualiza el cache
+          if (activeGameStatus?.inGame && activeGameStatus?.gameId) {
+            liveGamesCache.liveGames[activeGameStatus.gameId] = {
+              puuid: player.puuid,
+              lastCheckedAt: activeGameStatus.lastCheckedAt,
+            };
+            saveLiveGamesCache();
+          } else {
+            // Si no está en partida, solo borrar cache previa si la comprobación fue en vivo.
+            // Esto evita eliminar entradas que vinieron del poller cuando no se pudo confirmar.
+            if (activeGameStatus && activeGameStatus.fetchedLive === true && !activeGameStatus.inGame) {
+              for (const gameId in liveGamesCache.liveGames) {
+                if (liveGamesCache.liveGames[gameId].puuid === player.puuid) {
+                  delete liveGamesCache.liveGames[gameId];
+                }
+              }
+              saveLiveGamesCache();
+            }
+          }
+          return {
+            ...player,
+            inGame: Boolean(activeGameStatus?.inGame),
+            activeGameStatus,
+          };
+        } catch {
+          return player;
+        }
+      })
+    );
+
+    const playersWithMetadata = applyFriendMetadataToPlayers(updatedPlayers, friendsForEmotes);
     res.json({
       players: playersWithMetadata,
       cachedAt: ladderCache.lastUpdatedAt,
@@ -2085,7 +2226,7 @@ app.get("/api/status", (req, res) => {
     totalRequests: totalRiotRequests,
     todayRequests: todayRiotRequests,
     budgetRemaining1s: Math.max(0, 18 - req1s),
-    budgetRemaining2min: Math.max(0, 90 - req2min),
+    budgetRemaining2min: Math.max(0, 2000 - req2min),
     refreshCursor: ladderCache.refreshCursor,
     playersCached: Object.keys(ladderCache.playerSnapshotByKey).length,
     rawDataCached: Object.keys(ladderCache.rawDataByPuuid).length,
@@ -2136,6 +2277,65 @@ app.post("/api/force-refresh", requireAdmin, async (req, res) => {
   }
 });
 
+// Endpoint para refrescar el estado ingame de un jugador específico
+app.post("/api/force-refresh-player", requireAdmin, async (req, res) => {
+  const { riotId } = req.body;
+  if (!RIOT_API_KEY) return res.status(500).json({ error: "Sin RIOT_API_KEY" });
+  if (!riotId || typeof riotId !== "string" || !riotId.includes("#")) {
+    return res.status(400).json({ error: "riotId requerido en formato gameName#tagLine" });
+  }
+  const [gameName, tagLine] = riotId.split("#");
+  if (!gameName || !tagLine) {
+    return res.status(400).json({ error: "riotId inválido" });
+  }
+  // Buscar el puuid en friends.json
+  let puuid = null;
+  let encryptedSummonerId = null;
+  try {
+    const friends = JSON.parse(fs.readFileSync(FRIENDS_FILE, "utf8"));
+    const found = friends.find(f => f.gameName?.toLowerCase() === gameName.toLowerCase() && f.tagLine?.toLowerCase() === tagLine.toLowerCase());
+    if (found) puuid = found.puuid;
+  } catch {}
+  if (!puuid) {
+    return res.status(404).json({ error: "No se encontró el jugador en friends.json" });
+  }
+  // Buscar summonerId en cache o forzar fetch
+  try {
+    const summoner = await fetchSummonerWithCache(puuid);
+    encryptedSummonerId = summoner?.id;
+  } catch {}
+  if (!encryptedSummonerId) {
+    return res.status(404).json({ error: "No se encontró summonerId para ese jugador" });
+  }
+  // Forzar fetch a spectator-v5
+  try {
+    const result = await fetchActiveGameStatusWithCache(puuid, encryptedSummonerId, true); // Forzar fetch
+    return res.json({ ok: true, inGame: result.inGame, activeGameStatus: result });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Expose live games cache to frontend (no Riot key exposure)
+app.get('/api/live-games', (req, res) => {
+  try {
+    return res.json(liveGamesCache || { liveGames: {} });
+  } catch (err) {
+    return res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+// Admin endpoint: force refresh live-games for all friends (uses puuid -> summoner.id -> spectator)
+app.post('/api/refresh-live-games', requireAdmin, async (req, res) => {
+  if (!RIOT_API_KEY) return res.status(500).json({ error: 'Sin RIOT_API_KEY' });
+  try {
+    await pollFriendsLiveGames();
+    return res.json({ ok: true, liveGames: liveGamesCache.liveGames });
+  } catch (err) {
+    return res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
 if (HAS_CLIENT_BUILD) {
   app.use(express.static(CLIENT_DIST_DIR));
 
@@ -2180,6 +2380,163 @@ if (RIOT_API_KEY) {
 }
 
 scheduleLadderRefresh();
+
+// Poll friends' live games every minute and persist results to live-games-cache.json
+async function pollFriendsLiveGames() {
+  try {
+    let friends = [];
+    try {
+      friends = JSON.parse(fs.readFileSync(FRIENDS_FILE, 'utf8')) || [];
+    } catch (e) {
+      friends = [];
+    }
+
+    const nowIso = new Date().toISOString();
+    for (const f of friends) {
+      const puuid = f?.puuid;
+      const riotId = f.gameName && f.tagLine ? `${f.gameName}#${f.tagLine}` : null;
+      if (!puuid) continue;
+
+      // Try to resolve encrypted summoner id from cache or Riot
+      let encryptedSummonerId = ladderCache.rawDataByPuuid[puuid]?.summoner?.id || null;
+      if (!encryptedSummonerId) {
+        try {
+          const s = await fetchSummonerWithCache(puuid);
+          encryptedSummonerId = s?.id || null;
+        } catch (e) {
+          encryptedSummonerId = null;
+        }
+      }
+
+      // As fallback try lookup by name (may be ambiguous)
+      if (!encryptedSummonerId && riotId && riotId.includes('#')) {
+        try {
+          const nameOnly = riotId.split('#')[0];
+          const sByName = await riotFetch(
+            `https://${PLATFORM}.api.riotgames.com/lol/summoner/v4/summoners/by-name/${encodeURIComponent(nameOnly)}`,
+            { bypassRateLimited: true }
+          );
+          encryptedSummonerId = sByName?.id || null;
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      // If we have an encryptedSummonerId, query spectator
+      let active = { inGame: false, gameId: null, lastCheckedAt: nowIso };
+      if (encryptedSummonerId) {
+        try {
+          active = await fetchActiveGameStatusWithCache(puuid, encryptedSummonerId, true);
+        } catch (e) {
+          active = { inGame: false, gameId: null, lastCheckedAt: nowIso };
+        }
+      } else {
+        // update raw activeGameStatus lastCheckedAt even when we couldn't resolve id
+        const raw = ladderCache.rawDataByPuuid[puuid] || (ladderCache.rawDataByPuuid[puuid] = {});
+        raw.activeGameStatus = {
+          inGame: false,
+          gameId: null,
+          gameMode: null,
+          gameQueueConfigId: null,
+          gameStartTime: null,
+          lastCheckedAt: nowIso,
+        };
+      }
+
+      // Update liveGamesCache and ladderCache.players accordingly
+      if (active && active.inGame && active.gameId) {
+        // Use puuid as key so we can reliably map cache entries to players.
+        liveGamesCache.liveGames[puuid] = {
+          puuid,
+          riotId,
+          gameId: active.gameId,
+          lastCheckedAt: active.lastCheckedAt,
+        };
+      } else {
+        // Only remove cache entry if we've confirmed (live) the player is not in game.
+        // If the fetch didn't confirm live (fetchedLive !== true), keep existing cache entry.
+        if (active && active.fetchedLive === true && !active.inGame) {
+          delete liveGamesCache.liveGames[puuid];
+        }
+      }
+
+      // Update ladderCache.players in-memory
+      if (Array.isArray(ladderCache.players)) {
+        const p = ladderCache.players.find((pl) => pl.puuid === puuid || String(pl.riotId || '').toLowerCase() === String(riotId || '').toLowerCase());
+        if (p) {
+          p.inGame = Boolean(active?.inGame);
+          p.inGameRiotId = p.inGame ? (p.mainAccountRiotId || p.riotId || riotId) : null;
+          p.activeGameStatus = p.activeGameStatus || {};
+          p.activeGameStatus.inGame = p.inGame;
+          p.activeGameStatus.gameId = active?.gameId || null;
+          p.activeGameStatus.lastCheckedAt = active?.lastCheckedAt || nowIso;
+        }
+      }
+    }
+
+    // Persist to disk
+    saveLiveGamesCache();
+    saveCacheToFile();
+  } catch (err) {
+    console.warn('pollFriendsLiveGames error:', err?.message || err);
+  }
+}
+
+// Start polling every 60s
+setInterval(() => {
+  pollFriendsLiveGames().catch((e) => {});
+}, 60 * 1000);
+
+// Poll Riot spectator-v5 for every player in friends.json periodically
+async function pollSpectatorForFriends() {
+  if (!RIOT_API_KEY) return;
+  try {
+    const raw = fs.readFileSync(FRIENDS_FILE, "utf8");
+    const friends = JSON.parse(raw || "[]");
+    for (const f of friends) {
+      const puuid = f?.puuid;
+      if (!puuid) continue;
+      try {
+        const active = await riotFetch(
+          `https://${PLATFORM}.api.riotgames.com/lol/spectator/v5/active-games/by-summoner/${encodeURIComponent(puuid)}`,
+          { bypassRateLimited: true }
+        );
+        liveGamesCache.liveGames[puuid] = {
+          lastCheckedAt: new Date().toISOString(),
+          data: active,
+        };
+      } catch (err) {
+        const msg = String(err?.message || err || "");
+        // If we're rate-limited, keep the previous cache entry (if any) instead of overwriting
+        if (err?.code === "RATE_LIMITED") {
+          const existing = liveGamesCache.liveGames[puuid];
+          if (existing) {
+            existing.lastCheckedAt = new Date().toISOString();
+          }
+          continue;
+        }
+        // If the entry exists, keep it (avoid overwriting with transient errors)
+        const existing = liveGamesCache.liveGames[puuid];
+        if (existing) {
+          existing.lastCheckedAt = new Date().toISOString();
+          continue;
+        }
+        liveGamesCache.liveGames[puuid] = {
+          lastCheckedAt: new Date().toISOString(),
+          error: msg,
+          http404: isRiot404Error(err) || msg.includes("404"),
+        };
+      }
+    }
+    saveLiveGamesCache();
+  } catch (err) {
+    console.warn("pollSpectatorForFriends failed:", err.message || err);
+  }
+}
+
+// Start immediate poll and schedule every 60 seconds
+pollSpectatorForFriends().catch(() => {});
+setInterval(() => pollSpectatorForFriends().catch(() => {}), 60 * 1000);
 
 process.on("SIGINT", () => {
   saveApiStatsToFile(true);

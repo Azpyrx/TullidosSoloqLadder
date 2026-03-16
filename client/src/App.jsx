@@ -281,6 +281,24 @@ function buildLeagueOfGraphsLiveUrlFromRiotId(riotId) {
   return `https://www.leagueofgraphs.com/summoner/euw/${encodeURIComponent(gameName)}-${encodeURIComponent(tagLine)}/live-game`;
 }
 
+function buildPorofessorLiveUrlFromRiotId(riotId) {
+  const raw = String(riotId || "").trim();
+  if (!raw || !raw.includes("#")) return null;
+  const [gameNameRaw, tagLineRaw] = raw.split("#");
+  const gameName = String(gameNameRaw || "").trim();
+  const tagLine = String(tagLineRaw || "").trim();
+  if (!gameName || !tagLine) return null;
+  // Porofessor expects Riot ID with dash, not hash
+  return `https://porofessor.gg/live/euw/${encodeURIComponent(gameName)}-${encodeURIComponent(tagLine)}`;
+}
+
+function buildLeagueOfGraphsMatchUrlFromGameId(gameId) {
+  const raw = String(gameId || "").trim();
+  if (!raw) return null;
+  const normalizedGameId = raw.includes("_") ? raw.split("_").pop() : raw;
+  return `https://www.leagueofgraphs.com/match/euw/${encodeURIComponent(normalizedGameId)}`;
+}
+
 function buildDeeplolUrlFromRiotId(riotId) {
   const raw = String(riotId || "").trim();
   if (!raw || !raw.includes("#")) return null;
@@ -502,12 +520,9 @@ function buildPlayerWarnings(player) {
   const explicitDuoMate = player.duoPartner || player.lastDuoWith || null;
   const duoGamesRecent = Number(player.duoGamesTogetherRecent) || 0;
   if (explicitDuoMate) {
-    if (winRate >= 50) {
-      notes.push(duoGamesRecent >= 2
-        ? `Hace duo con ${explicitDuoMate} (${duoGamesRecent} soloq)`
-        : `Hace duo con ${explicitDuoMate}`);
-    }
-    else notes.push("Hace duo y pierde");
+    notes.push(duoGamesRecent >= 2
+      ? `En duo con ${explicitDuoMate} (${duoGamesRecent} soloq)`
+      : `En duo con ${explicitDuoMate}`);
   }
 
   if (champs.length > 0) {
@@ -746,12 +761,8 @@ function ActivityTicker({ groupedPlayers }) {
       }
     }
 
-    // Shuffle signals so activity warnings rotate in a less predictable order.
-    for (let i = list.length - 1; i > 0; i -= 1) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [list[i], list[j]] = [list[j], list[i]];
-    }
 
+    // Devolver la lista sin mezclar, para evitar impurezas en el render.
     return list;
   }, [groupedPlayers]);
 
@@ -845,7 +856,38 @@ export default function App() {
       const res = await fetch(`${API}/api/ladder`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setPlayers(Array.isArray(data) ? data : data.players || []);
+      const newPlayers = Array.isArray(data) ? data : data.players || [];
+      setPlayers(newPlayers);
+      // Immediately merge live-games cache so IN GAME chip appears even if server response
+      try {
+        const liveRes = await fetch(`${API}/api/live-games`);
+        if (liveRes.ok) {
+          const liveData = await liveRes.json();
+          const live = liveData?.liveGames || {};
+          setPlayers((prev) => {
+            if (!Array.isArray(prev)) return prev || [];
+            return prev.map((p) => {
+              for (const gameId of Object.keys(live)) {
+                const entry = live[gameId];
+                const isMatchByPuuid = entry && entry.puuid && entry.puuid === p.puuid;
+                const isMatchByKey = gameId === p.puuid;
+                const isMatchByRiotId = entry && entry.riotId && p.riotId && entry.riotId.toLowerCase() === p.riotId.toLowerCase();
+                if (isMatchByPuuid || isMatchByKey || isMatchByRiotId) {
+                  return {
+                    ...p,
+                    inGame: true,
+                    activeGameStatus: { inGame: true, gameId, lastCheckedAt: entry.lastCheckedAt || new Date().toISOString() },
+                    inGameRiotId: p.inGameRiotId || p.mainAccountRiotId || p.riotId,
+                  };
+                }
+              }
+              return p;
+            });
+          });
+        }
+      } catch (err) {
+        // silent
+      }
       if (!Array.isArray(data)) {
         setCacheMeta({
           cachedAt: data.cachedAt || null,
@@ -865,6 +907,54 @@ export default function App() {
   useEffect(() => {
     loadLadder();
   }, [loadLadder]);
+
+  // Merge live-games cache into players so IN GAME chip appears reliably
+  useEffect(() => {
+    let mounted = true;
+    async function fetchLiveGamesAndMerge() {
+      try {
+        const res = await fetch(`${API}/api/live-games`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!mounted) return;
+        const live = data?.liveGames || {};
+        setPlayers((prev) => {
+          if (!Array.isArray(prev)) return prev || [];
+          return prev.map((p) => {
+            for (const gameId of Object.keys(live)) {
+              const entry = live[gameId];
+              const entryGameId = entry?.gameId || entry?.data?.gameId;
+              // Only treat as in-game if the cache entry contains a real gameId.
+              if (!entryGameId) continue;
+
+              const isMatchByPuuid = entry && entry.puuid && entry.puuid === p.puuid;
+              const isMatchByKey = gameId === p.puuid;
+              const isMatchByRiotId = entry && entry.riotId && p.riotId && entry.riotId.toLowerCase() === p.riotId.toLowerCase();
+              const isMatchByActiveGameId = p.activeGameStatus?.gameId && p.activeGameStatus.gameId === entryGameId;
+              if (isMatchByPuuid || isMatchByKey || isMatchByActiveGameId || isMatchByRiotId) {
+                return {
+                  ...p,
+                  liveGameCached: true,
+                  activeGameStatus: { inGame: true, gameId: entryGameId, lastCheckedAt: entry.lastCheckedAt || new Date().toISOString() },
+                  inGameRiotId: p.inGameRiotId || p.mainAccountRiotId || p.riotId,
+                };
+              }
+            }
+            return p;
+          });
+        });
+      } catch (err) {
+        // silent
+      }
+    }
+
+    fetchLiveGamesAndMerge();
+    const id = setInterval(fetchLiveGamesAndMerge, 30 * 1000);
+    return () => {
+      mounted = false;
+      clearInterval(id);
+    };
+  }, []);
 
   useEffect(() => {
     const onPopState = () => {
@@ -1378,6 +1468,15 @@ export default function App() {
             title={rankingPopupMatchUrl ? "Abrir partida en League of Graphs" : undefined}
           >
             <span className="rank-activity-popup__kicker">Actividad en directo</span>
+            {(() => {
+              const ts = Number(rankingActivityPopup?.gameEndTimestamp || Date.parse(String(rankingActivityPopup?.updatedAt || "")) || 0);
+              if (!ts) return null;
+              const d = new Date(ts);
+              const hh = String(d.getHours()).padStart(2, '0');
+              const mm = String(d.getMinutes()).padStart(2, '0');
+              const ss = String(d.getSeconds()).padStart(2, '0');
+              return <span className="rank-activity-popup__hora">{hh}:{mm}:{ss}</span>;
+            })()}
             <div className="rank-activity-popup__head">
               {rankingActivityPopup.championName ? (
                 <img
@@ -1398,11 +1497,10 @@ export default function App() {
         </div>
       )}
 
+
       <section className="duel-card">
         <div className="duel-head">
-          <p className="duel-kicker">Apuesta</p>
-          <h3>Duelo de los 100 EUR</h3>
-          <span className="duel-subtitle">Cara a cara: quien saca mas elo</span>
+          {/* Texto de apuesta eliminado */}
         </div>
 
         <div className="duel-board">
@@ -1612,10 +1710,15 @@ export default function App() {
               {filteredPlayers.map((p) => {
                 const playerWarnings = buildPlayerWarnings(p);
                 const playerProfileUrl = getPreferredPlatformUrl(p.mainAccountRiotId || p.riotId, preferredPlatform);
-                const liveGameUrl = buildLeagueOfGraphsLiveUrlFromRiotId(p.inGameRiotId || p.mainAccountRiotId || p.riotId);
-                const showInGameChip = Boolean(liveGameUrl) && Boolean(p.inGame);
+                const matchId = p?.activeGameStatus?.gameId || null;
+                const matchUrl = matchId ? buildLeagueOfGraphsMatchUrlFromGameId(matchId) : null;
+                const riotUrl = buildLeagueOfGraphsLiveUrlFromRiotId(p.inGameRiotId || p.mainAccountRiotId || p.riotId);
+                const poroUrl = p.liveGameCached ? buildPorofessorLiveUrlFromRiotId(p.inGameRiotId || p.mainAccountRiotId || p.riotId) : null;
+                const liveGameUrl = matchUrl || poroUrl || riotUrl || null;
+                // Show chip if we know the player is in-game (from cache or live fetch)
+                const showInGameChip = Boolean(p.liveGameCached);
                 const showRiotIdRow = shouldRenderRiotId(p.emote, p.riotId) || showInGameChip;
-                const inGameChipTitle = "Abrir live game en LeagueOfGraphs";
+                const inGameChipTitle = liveGameUrl ? "Abrir live game en LeagueOfGraphs" : "Jugador está in game";
                 return (
                   <div
                     key={p.groupKey || p.riotId}
@@ -1744,6 +1847,26 @@ export default function App() {
       )}
     </>
   );
+
+  // Log live-games API to browser console (no direct Riot calls)
+  useEffect(() => {
+    let mounted = true;
+    async function fetchLiveGames() {
+      try {
+        const res = await fetch(`${API}/api/live-games`);
+        const json = await res.json();
+        if (!mounted) return;
+        console.log('[live-games]', json);
+      } catch (err) {
+        if (!mounted) return;
+        console.warn('[live-games] fetch failed', err);
+      }
+    }
+
+    fetchLiveGames();
+    const id = setInterval(fetchLiveGames, 60 * 1000);
+    return () => { mounted = false; clearInterval(id); };
+  }, []);
 
   const hachitasContent = (
     <>
