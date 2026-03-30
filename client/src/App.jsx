@@ -847,6 +847,8 @@ export default function App() {
             return prev.map((p) => {
               for (const gameId of Object.keys(live)) {
                 const entry = live[gameId];
+                const entryGameId = entry?.gameId || entry?.data?.gameId;
+                if (!entryGameId) continue;
                 const isMatchByPuuid = entry && entry.puuid && entry.puuid === p.puuid;
                 const isMatchByKey = gameId === p.puuid;
                 const isMatchByRiotId = entry && entry.riotId && p.riotId && entry.riotId.toLowerCase() === p.riotId.toLowerCase();
@@ -854,7 +856,7 @@ export default function App() {
                   return {
                     ...p,
                     inGame: true,
-                    activeGameStatus: { inGame: true, gameId, lastCheckedAt: entry.lastCheckedAt || new Date().toISOString() },
+                    activeGameStatus: { inGame: true, gameId: entryGameId, lastCheckedAt: entry.lastCheckedAt || new Date().toISOString() },
                     inGameRiotId: p.inGameRiotId || p.mainAccountRiotId || p.riotId,
                   };
                 }

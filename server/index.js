@@ -60,6 +60,8 @@ const FULL_REFRESH_EVERY_CYCLE = String(process.env.FULL_REFRESH_EVERY_CYCLE || 
 const ACCOUNT_REFRESH_TTL_MS = Number(process.env.ACCOUNT_REFRESH_TTL_MS) || 24 * 60 * 60 * 1000;
 const SUMMONER_REFRESH_TTL_MS = Number(process.env.SUMMONER_REFRESH_TTL_MS) || 6 * 60 * 60 * 1000;
 const ACTIVE_GAME_STATUS_TTL_MS = Number(process.env.ACTIVE_GAME_STATUS_TTL_MS) || 30 * 1000;
+const LIVE_GAMES_POLL_INTERVAL_MS = Number(process.env.LIVE_GAMES_POLL_INTERVAL_MS) || LADDER_CACHE_TTL_MS;
+const LIVE_GAMES_POLL_DELAY_MS = Number(process.env.LIVE_GAMES_POLL_DELAY_MS) || 10 * 1000;
 const LP_STEP_ANOMALY_WINDOW_MS = Number(process.env.LP_STEP_ANOMALY_WINDOW_MS) || 30 * 60 * 1000;
 const LP_STEP_ANOMALY_THRESHOLD = Number(process.env.LP_STEP_ANOMALY_THRESHOLD) || 350;
 const ACTIVITY_FEED_HISTORY_LIMIT = Math.max(5, Number(process.env.ACTIVITY_FEED_HISTORY_LIMIT) || 20);
@@ -1335,10 +1337,14 @@ async function fetchActiveGameStatusWithCache(puuid, encryptedSummonerId, force 
         liveGamesCache.liveGames[puuid] = {
           puuid,
           gameId: cached.gameId,
-      };
-      saveLiveGamesCache();
-    }
-    return { ...cached, fetchedLive: false };
+        };
+        saveLiveGamesCache();
+      } else if (liveGamesCache.liveGames[puuid]) {
+        // Si el cache dice que ya no está en juego, asegúrate de borrar la entrada en el live-games cache.
+        delete liveGamesCache.liveGames[puuid];
+        saveLiveGamesCache();
+      }
+      return { ...cached, fetchedLive: false };
   }
 
   if (!encryptedSummonerId) {
@@ -1351,6 +1357,10 @@ async function fetchActiveGameStatusWithCache(puuid, encryptedSummonerId, force 
       lastCheckedAt: new Date().toISOString(),
     };
     raw.activeGameStatus = fallback;
+    if (!fallback.inGame && liveGamesCache.liveGames[puuid]) {
+      delete liveGamesCache.liveGames[puuid];
+      saveLiveGamesCache();
+    }
     return fallback;
   }
 
@@ -1386,6 +1396,30 @@ async function fetchActiveGameStatusWithCache(puuid, encryptedSummonerId, force 
     raw.activeGameStatus = next;
     return { ...next, fetchedLive: true };
   } catch (err) {
+    if (err?.code === "RATE_LIMITED") {
+      // Cuando Riot devuelve 429, no queremos eskalar el error en el log ni romper el ciclo.
+      if (cached) {
+        if (!cached.inGame && liveGamesCache.liveGames[puuid]) {
+          delete liveGamesCache.liveGames[puuid];
+          saveLiveGamesCache();
+        }
+        return { ...cached, fetchedLive: false };
+      }
+      if (liveGamesCache.liveGames[puuid]) {
+        delete liveGamesCache.liveGames[puuid];
+        saveLiveGamesCache();
+      }
+      return {
+        inGame: false,
+        gameId: null,
+        gameMode: null,
+        gameQueueConfigId: null,
+        gameStartTime: null,
+        lastCheckedAt: new Date().toISOString(),
+        fetchedLive: false,
+      };
+    }
+
     if (isRiot404Error(err)) {
       // Si la partida terminó, elimina del liveGamesCache
       delete liveGamesCache.liveGames[puuid];
@@ -1404,7 +1438,16 @@ async function fetchActiveGameStatusWithCache(puuid, encryptedSummonerId, force 
 
     if (cached) {
       console.log(`[CACHE] active game fallback for ${puuid.slice(0, 8)}…`);
+      if (!cached.inGame && liveGamesCache.liveGames[puuid]) {
+        delete liveGamesCache.liveGames[puuid];
+        saveLiveGamesCache();
+      }
       return { ...cached, fetchedLive: false };
+    }
+
+    if (liveGamesCache.liveGames[puuid]) {
+      delete liveGamesCache.liveGames[puuid];
+      saveLiveGamesCache();
     }
 
     return {
@@ -1485,7 +1528,9 @@ async function fetchPlayerDataFromAccount(account, fallback = {}) {
   // Si el jugador está en liveGamesCache, forzar inGame a true
   let inGame = Boolean(activeGameStatus?.inGame);
   if (!inGame && riotId) {
-    inGame = Object.values(liveGamesCache.liveGames).some((g) => g.puuid === account.puuid);
+    inGame = Object.values(liveGamesCache.liveGames).some((g) => (
+      g.puuid === account.puuid && Boolean(g.gameId || g.data?.gameId)
+    ));
   }
   return {
     riotId,
@@ -1992,16 +2037,17 @@ app.get("/api/ladder", async (req, res) => {
         try {
           // Si hay un valor fresco en liveGamesCache, úsalo
           let cachedLive = null;
-          let cachedGameId = null;
-          for (const gameId in liveGamesCache.liveGames) {
-            const entry = liveGamesCache.liveGames[gameId];
-            if (entry.puuid === player.puuid) {
+          let cachedKey = null;
+          for (const [cacheKey, entry] of Object.entries(liveGamesCache.liveGames)) {
+            const entryGameId = entry?.gameId || entry?.data?.gameId;
+            if (!entryGameId) continue;
+            if (entry?.puuid === player.puuid || cacheKey === player.puuid) {
               cachedLive = {
                 inGame: true,
-                gameId,
+                gameId: entryGameId,
                 lastCheckedAt: entry.lastCheckedAt,
               };
-              cachedGameId = gameId;
+              cachedKey = cacheKey;
               break;
             }
           }
@@ -2009,9 +2055,9 @@ app.get("/api/ladder", async (req, res) => {
             // Verificamos en vivo antes de borrar el cache: solo borrar si la comprobación fue en vivo
             const summoner = await fetchSummonerWithCache(player.puuid);
             const activeGameStatus = await fetchActiveGameStatusWithCache(player.puuid, summoner?.id || null, true);
-            if (!activeGameStatus?.inGame && cachedGameId) {
+            if (!activeGameStatus?.inGame && cachedKey) {
               if (activeGameStatus.fetchedLive) {
-                delete liveGamesCache.liveGames[cachedGameId];
+                delete liveGamesCache.liveGames[cachedKey];
                 saveLiveGamesCache();
                 return {
                   ...player,
@@ -2037,8 +2083,10 @@ app.get("/api/ladder", async (req, res) => {
           const activeGameStatus = await fetchActiveGameStatusWithCache(player.puuid, summoner?.id || null);
           // Si está en partida, actualiza el cache
           if (activeGameStatus?.inGame && activeGameStatus?.gameId) {
-            liveGamesCache.liveGames[activeGameStatus.gameId] = {
+            liveGamesCache.liveGames[player.puuid] = {
               puuid: player.puuid,
+              riotId: player.riotId || null,
+              gameId: activeGameStatus.gameId,
               lastCheckedAt: activeGameStatus.lastCheckedAt,
             };
             saveLiveGamesCache();
@@ -2046,9 +2094,9 @@ app.get("/api/ladder", async (req, res) => {
             // Si no está en partida, solo borrar cache previa si la comprobación fue en vivo.
             // Esto evita eliminar entradas que vinieron del poller cuando no se pudo confirmar.
             if (activeGameStatus && activeGameStatus.fetchedLive === true && !activeGameStatus.inGame) {
-              for (const gameId in liveGamesCache.liveGames) {
-                if (liveGamesCache.liveGames[gameId].puuid === player.puuid) {
-                  delete liveGamesCache.liveGames[gameId];
+              for (const [cacheKey, entry] of Object.entries(liveGamesCache.liveGames)) {
+                if (entry?.puuid === player.puuid || cacheKey === player.puuid) {
+                  delete liveGamesCache.liveGames[cacheKey];
                 }
               }
               saveLiveGamesCache();
@@ -2460,10 +2508,27 @@ if (RIOT_API_KEY) {
 }
 
 scheduleLadderRefresh();
+scheduleLiveGamesPolling();
 
-// Poll friends' live games every minute and persist results to live-games-cache.json
+// Poll friends' live games on a scheduled interval and persist results to live-games-cache.json
 async function pollFriendsLiveGames() {
   try {
+    // Evita golpear la API de Riot cuando sabemos que estamos rate-limited.
+    if (Date.now() < riotRateLimitedUntil) {
+      return;
+    }
+    if (ladderCache.refreshPromise) {
+      try {
+        await ladderCache.refreshPromise;
+      } catch (err) {
+        console.warn("pollFriendsLiveGames wait for ladder refresh failed:", err?.message || err);
+        return;
+      }
+    }
+    if (!ladderCache.lastUpdatedAt) {
+      return;
+    }
+
     let friends = [];
     try {
       friends = JSON.parse(fs.readFileSync(FRIENDS_FILE, 'utf8')) || [];
@@ -2558,65 +2623,19 @@ async function pollFriendsLiveGames() {
     saveLiveGamesCache();
     saveCacheToFile();
   } catch (err) {
+    if (err?.code === "RATE_LIMITED") {
+      return;
+    }
     console.warn('pollFriendsLiveGames error:', err?.message || err);
   }
 }
 
-// Start polling every 60s
-setInterval(() => {
-  pollFriendsLiveGames().catch((e) => {});
-}, 60 * 1000);
-
-// Poll Riot spectator-v5 for every player in friends.json periodically
-async function pollSpectatorForFriends() {
+function scheduleLiveGamesPolling() {
   if (!RIOT_API_KEY) return;
-  try {
-    const raw = fs.readFileSync(FRIENDS_FILE, "utf8");
-    const friends = JSON.parse(raw || "[]");
-    for (const f of friends) {
-      const puuid = f?.puuid;
-      if (!puuid) continue;
-      try {
-        const active = await riotFetch(
-          `https://${PLATFORM}.api.riotgames.com/lol/spectator/v5/active-games/by-summoner/${encodeURIComponent(puuid)}`,
-          { priority: REQUEST_PRIORITY.IN_GAME }
-        );
-        liveGamesCache.liveGames[puuid] = {
-          lastCheckedAt: new Date().toISOString(),
-          data: active,
-        };
-      } catch (err) {
-        const msg = String(err?.message || err || "");
-        // If we're rate-limited, keep the previous cache entry (if any) instead of overwriting
-        if (err?.code === "RATE_LIMITED") {
-          const existing = liveGamesCache.liveGames[puuid];
-          if (existing) {
-            existing.lastCheckedAt = new Date().toISOString();
-          }
-          continue;
-        }
-        // If the entry exists, keep it (avoid overwriting with transient errors)
-        const existing = liveGamesCache.liveGames[puuid];
-        if (existing) {
-          existing.lastCheckedAt = new Date().toISOString();
-          continue;
-        }
-        liveGamesCache.liveGames[puuid] = {
-          lastCheckedAt: new Date().toISOString(),
-          error: msg,
-          http404: isRiot404Error(err) || msg.includes("404"),
-        };
-      }
-    }
-    saveLiveGamesCache();
-  } catch (err) {
-    console.warn("pollSpectatorForFriends failed:", err.message || err);
-  }
+  const run = () => pollFriendsLiveGames().catch(() => {});
+  setTimeout(run, LIVE_GAMES_POLL_DELAY_MS);
+  setInterval(run, LIVE_GAMES_POLL_INTERVAL_MS);
 }
-
-// Start immediate poll and schedule every 60 seconds
-pollSpectatorForFriends().catch(() => {});
-setInterval(() => pollSpectatorForFriends().catch(() => {}), 60 * 1000);
 
 process.on("SIGINT", () => {
   saveApiStatsToFile(true);

@@ -128,6 +128,8 @@ cp server/.env.example server/.env
 | `RIOT_API_KEY` | ✅ | — | Clave de la API de Riot Games |
 | `PORT` | ❌ | `3001` | Puerto del servidor Express |
 | `LADDER_CACHE_TTL_MS` | ❌ | `120000` | Intervalo de refresco del ladder (ms) |
+| `LIVE_GAMES_POLL_INTERVAL_MS` | ❌ | `120000` | Intervalo de polling in-game (ms) |
+| `LIVE_GAMES_POLL_DELAY_MS` | ❌ | `10000` | Espera antes del polling in-game tras refresco general (ms) |
 | `MATCH_SYNC_TTL_MS` | ❌ | `120000` | Intervalo de refresco de partidas (ms) |
 | `RATE_LIMIT_FALLBACK_MS` | ❌ | `60000` | Espera al alcanzar el rate limit (ms) |
 | `FRIENDS_PER_REFRESH` | ❌ | `2` | Jugadores actualizados por ciclo (no-full) |
