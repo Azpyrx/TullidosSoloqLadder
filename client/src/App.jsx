@@ -836,10 +836,20 @@ export default function App() {
       const data = await res.json();
       const newPlayers = Array.isArray(data) ? data : data.players || [];
       setPlayers(newPlayers);
-      // Immediately merge live-games cache so IN GAME chip appears even if server response
-      try {
-        const liveRes = await fetch(`${API}/api/live-games`);
-        if (liveRes.ok) {
+      if (!Array.isArray(data)) {
+        setCacheMeta({
+          cachedAt: data.cachedAt || null,
+          cacheTtlMs: data.cacheTtlMs || null,
+          stale: Boolean(data.stale),
+          lastError: data.lastError || null,
+          ddragonVersion: data.ddragonVersion || "14.24.1",
+        });
+      }
+      // Fetch live-games in background without blocking (don't await)
+      (async () => {
+        try {
+          const liveRes = await fetch(`${API}/api/live-games`);
+          if (!liveRes.ok) return;
           const liveData = await liveRes.json();
           const live = liveData?.liveGames || {};
           setPlayers((prev) => {
@@ -864,19 +874,10 @@ export default function App() {
               return p;
             });
           });
+        } catch {
+          // Silent: live games cache is a best-effort enhancement.
         }
-      } catch {
-        // Silent: live games cache is a best-effort enhancement.
-      }
-      if (!Array.isArray(data)) {
-        setCacheMeta({
-          cachedAt: data.cachedAt || null,
-          cacheTtlMs: data.cacheTtlMs || null,
-          stale: Boolean(data.stale),
-          lastError: data.lastError || null,
-          ddragonVersion: data.ddragonVersion || "14.24.1",
-        });
-      }
+      })();
     } catch (err) {
       setError(err.message || "Error cargando la ladder");
     } finally {

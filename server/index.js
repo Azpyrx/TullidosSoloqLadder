@@ -1990,58 +1990,21 @@ app.get("/api/player", async (req, res) => {
   }
 });
 
-// GET /api/ladder  — devuelve todos los amigos ordenados por rank
-app.get("/api/ladder", async (req, res) => {
-  if (!RIOT_API_KEY) {
-    return res.status(500).json({ error: "Falta RIOT_API_KEY en server/.env" });
-  }
-
-  try {
-    // If Riot is currently rate-limited, serve the last cached ladder snapshot immediately.
-    if (Date.now() < riotRateLimitedUntil && ladderCache.players.length > 0) {
-      let friendsForEmotes = [];
+// Helper: refresh only in-game statuses (called from ladder endpoint or background)
+async function refreshInGameStatusesOnly() {
+  const updatedPlayers = await Promise.all(
+    ladderCache.players.map(async (player) => {
       try {
-        friendsForEmotes = readFriends();
-      } catch {
-        friendsForEmotes = [];
-      }
-      const playersWithMetadata = applyFriendMetadataToPlayers(ladderCache.players, friendsForEmotes);
-      return res.json({
-        players: playersWithMetadata,
-        cachedAt: ladderCache.lastUpdatedAt,
-        cacheTtlMs: LADDER_CACHE_TTL_MS,
-        stale: true,
-        lastError: "Riot rate limit active",
-        rateLimitedUntil: new Date(riotRateLimitedUntil).toISOString(),
-        ddragonVersion: DDRAGON_VERSION,
-      });
-    }
-
-    let friendsForEmotes = [];
-    try {
-      friendsForEmotes = readFriends();
-    } catch {
-      friendsForEmotes = [];
-    }
-
-    if (ladderCache.refreshPromise) {
-      await ladderCache.refreshPromise;
-    } else if (!ladderCache.lastUpdatedAt) {
-      await refreshLadderCache();
-    }
-
-    // Refrescar el estado inGame de todos los jugadores antes de responder, cacheando en live-games-cache.json
-    const now = Date.now();
-    const updatedPlayers = await Promise.all(
-      ladderCache.players.map(async (player) => {
-        try {
-          // Si hay un valor fresco en liveGamesCache, úsalo
-          let cachedLive = null;
-          let cachedKey = null;
-          for (const [cacheKey, entry] of Object.entries(liveGamesCache.liveGames)) {
-            const entryGameId = entry?.gameId || entry?.data?.gameId;
-            if (!entryGameId) continue;
-            if (entry?.puuid === player.puuid || cacheKey === player.puuid) {
+        // Si hay un valor fresco en liveGamesCache y está en TTL, úsalo sin consultar
+        let cachedLive = null;
+        let cachedKey = null;
+        for (const [cacheKey, entry] of Object.entries(liveGamesCache.liveGames)) {
+          const entryGameId = entry?.gameId || entry?.data?.gameId;
+          if (!entryGameId) continue;
+          if (entry?.puuid === player.puuid || cacheKey === player.puuid) {
+            // Solo usar cache si es fresco (menos de 30s)
+            const entryAge = entry?.lastCheckedAt ? Date.now() - Date.parse(entry.lastCheckedAt) : Infinity;
+            if (entryAge < ACTIVE_GAME_STATUS_TTL_MS) {
               cachedLive = {
                 inGame: true,
                 gameId: entryGameId,
@@ -2051,67 +2014,137 @@ app.get("/api/ladder", async (req, res) => {
               break;
             }
           }
-          if (cachedLive) {
-            // Verificamos en vivo antes de borrar el cache: solo borrar si la comprobación fue en vivo
-            const summoner = await fetchSummonerWithCache(player.puuid);
-            const activeGameStatus = await fetchActiveGameStatusWithCache(player.puuid, summoner?.id || null, true);
-            if (!activeGameStatus?.inGame && cachedKey) {
-              if (activeGameStatus.fetchedLive) {
-                delete liveGamesCache.liveGames[cachedKey];
-                saveLiveGamesCache();
-                return {
-                  ...player,
-                  inGame: false,
-                  activeGameStatus,
-                };
-              }
-              // No confirmar en vivo -> mantener el cache hasta la próxima verificación
+        }
+        if (cachedLive) {
+          // Verificamos en vivo antes de borrar el cache: solo borrar si la comprobación fue en vivo
+          const summoner = await fetchSummonerWithCache(player.puuid);
+          const activeGameStatus = await fetchActiveGameStatusWithCache(player.puuid, summoner?.id || null, false);
+          if (!activeGameStatus?.inGame && cachedKey) {
+            if (activeGameStatus.fetchedLive) {
+              delete liveGamesCache.liveGames[cachedKey];
+              saveLiveGamesCache();
               return {
                 ...player,
-                inGame: true,
-                activeGameStatus: cachedLive,
+                inGame: false,
+                activeGameStatus,
               };
             }
+            // No confirmar en vivo -> mantener el cache solo si está fresco
             return {
               ...player,
               inGame: true,
               activeGameStatus: cachedLive,
             };
           }
-          // Si no hay valor fresco, consulta y actualiza el cache
-          const summoner = await fetchSummonerWithCache(player.puuid);
-          const activeGameStatus = await fetchActiveGameStatusWithCache(player.puuid, summoner?.id || null);
-          // Si está en partida, actualiza el cache
-          if (activeGameStatus?.inGame && activeGameStatus?.gameId) {
-            liveGamesCache.liveGames[player.puuid] = {
-              puuid: player.puuid,
-              riotId: player.riotId || null,
-              gameId: activeGameStatus.gameId,
-              lastCheckedAt: activeGameStatus.lastCheckedAt,
-            };
-            saveLiveGamesCache();
-          } else {
-            // Si no está en partida, solo borrar cache previa si la comprobación fue en vivo.
-            // Esto evita eliminar entradas que vinieron del poller cuando no se pudo confirmar.
-            if (activeGameStatus && activeGameStatus.fetchedLive === true && !activeGameStatus.inGame) {
-              for (const [cacheKey, entry] of Object.entries(liveGamesCache.liveGames)) {
-                if (entry?.puuid === player.puuid || cacheKey === player.puuid) {
-                  delete liveGamesCache.liveGames[cacheKey];
-                }
-              }
-              saveLiveGamesCache();
-            }
-          }
           return {
             ...player,
-            inGame: Boolean(activeGameStatus?.inGame),
-            activeGameStatus,
+            inGame: true,
+            activeGameStatus: cachedLive,
           };
-        } catch {
-          return player;
         }
-      })
-    );
+        // Si no hay valor fresco, consulta y actualiza el cache
+        const summoner = await fetchSummonerWithCache(player.puuid);
+        const activeGameStatus = await fetchActiveGameStatusWithCache(player.puuid, summoner?.id || null);
+        // Si está en partida, actualiza el cache
+        if (activeGameStatus?.inGame && activeGameStatus?.gameId) {
+          liveGamesCache.liveGames[player.puuid] = {
+            puuid: player.puuid,
+            riotId: player.riotId || null,
+            gameId: activeGameStatus.gameId,
+            lastCheckedAt: activeGameStatus.lastCheckedAt,
+          };
+          saveLiveGamesCache();
+        } else {
+          // Si no está en partida, solo borrar cache previa si la comprobación fue en vivo.
+          // Esto evita eliminar entradas que vinieron del poller cuando no se pudo confirmar.
+          if (activeGameStatus && activeGameStatus.fetchedLive === true && !activeGameStatus.inGame) {
+            for (const [cacheKey, entry] of Object.entries(liveGamesCache.liveGames)) {
+              if (entry?.puuid === player.puuid || cacheKey === player.puuid) {
+                delete liveGamesCache.liveGames[cacheKey];
+              }
+            }
+            saveLiveGamesCache();
+          }
+        }
+        return {
+          ...player,
+          inGame: Boolean(activeGameStatus?.inGame),
+          activeGameStatus,
+        };
+      } catch {
+        return player;
+      }
+    })
+  );
+  return updatedPlayers;
+}
+
+// GET /api/ladder  — devuelve todos los amigos ordenados por rank
+app.get("/api/ladder", async (req, res) => {
+  if (!RIOT_API_KEY) {
+    return res.status(500).json({ error: "Falta RIOT_API_KEY en server/.env" });
+  }
+
+  try {
+    let friendsForEmotes = [];
+    try {
+      friendsForEmotes = readFriends();
+    } catch {
+      friendsForEmotes = [];
+    }
+
+    // If Riot is currently rate-limited, serve the last cached ladder snapshot immediately.
+    if (Date.now() < riotRateLimitedUntil) {
+      if (ladderCache.players.length > 0) {
+        const playersWithMetadata = applyFriendMetadataToPlayers(ladderCache.players, friendsForEmotes);
+        return res.json({
+          players: playersWithMetadata,
+          cachedAt: ladderCache.lastUpdatedAt,
+          cacheTtlMs: LADDER_CACHE_TTL_MS,
+          stale: true,
+          lastError: "Riot rate limit active",
+          rateLimitedUntil: new Date(riotRateLimitedUntil).toISOString(),
+          ddragonVersion: DDRAGON_VERSION,
+        });
+      }
+      return res.status(503).json({ error: "Riot rate-limited and no cache available" });
+    }
+
+    // Fast path: if cache exists and is reasonably fresh, return it immediately while updating in-game asynchronously
+    const cacheAge = ladderCache.lastUpdatedAt ? Date.now() - Date.parse(ladderCache.lastUpdatedAt) : Infinity;
+    const isCacheReasonablyFresh = cacheAge < LADDER_CACHE_TTL_MS;
+    if (isCacheReasonablyFresh && ladderCache.players.length > 0) {
+      const playersWithMetadata = applyFriendMetadataToPlayers(ladderCache.players, friendsForEmotes);
+      // Return immediately with cached in-game statuses
+      res.json({
+        players: playersWithMetadata,
+        cachedAt: ladderCache.lastUpdatedAt,
+        cacheTtlMs: LADDER_CACHE_TTL_MS,
+        stale: false,
+        lastError: null,
+        ddragonVersion: DDRAGON_VERSION,
+      });
+      // Fire-and-forget: update in-game statuses in background without blocking
+      setImmediate(() => {
+        (async () => {
+          try {
+            await refreshInGameStatusesOnly();
+          } catch (err) {
+            console.warn("Background in-game update failed:", err?.message || err);
+          }
+        })();
+      });
+      return;
+    }
+
+    if (ladderCache.refreshPromise) {
+      await ladderCache.refreshPromise;
+    } else if (!ladderCache.lastUpdatedAt) {
+      await refreshLadderCache();
+    }
+
+    // Refrescar el estado inGame de todos los jugadores
+    const updatedPlayers = await refreshInGameStatusesOnly();
 
     const playersWithMetadata = applyFriendMetadataToPlayers(updatedPlayers, friendsForEmotes);
     res.json({

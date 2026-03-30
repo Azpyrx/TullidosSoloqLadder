@@ -1,7 +1,7 @@
 {
-  "totalPageViews": 279,
-  "totalConsentedPageViews": 279,
-  "lastUpdatedAt": "2026-03-16T18:15:11.031Z",
+  "totalPageViews": 282,
+  "totalConsentedPageViews": 282,
+  "lastUpdatedAt": "2026-03-30T13:31:09.546Z",
   "events": [
     {
       "id": "1773435784322-kah2fq",
@@ -4185,6 +4185,51 @@
       "timezone": "Europe/Madrid",
       "screen": "1920x1080",
       "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+      "anonymizedIp": "1:0000",
+      "consentAccepted": true
+    },
+    {
+      "id": "1774877300560-2pn3p2",
+      "type": "page_view",
+      "at": "2026-03-30T13:28:20.560Z",
+      "pagePath": "/",
+      "source": "direct",
+      "country": "unknown",
+      "city": "unknown",
+      "language": "es",
+      "timezone": "Europe/Madrid",
+      "screen": "1920x1080",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "anonymizedIp": "1:0000",
+      "consentAccepted": true
+    },
+    {
+      "id": "1774877469540-oj0f4f",
+      "type": "page_view",
+      "at": "2026-03-30T13:31:09.540Z",
+      "pagePath": "/",
+      "source": "direct",
+      "country": "unknown",
+      "city": "unknown",
+      "language": "es",
+      "timezone": "Europe/Madrid",
+      "screen": "1920x1080",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "anonymizedIp": "1:0000",
+      "consentAccepted": true
+    },
+    {
+      "id": "1774877469546-qheoto",
+      "type": "page_view",
+      "at": "2026-03-30T13:31:09.546Z",
+      "pagePath": "/",
+      "source": "direct",
+      "country": "unknown",
+      "city": "unknown",
+      "language": "es",
+      "timezone": "Europe/Madrid",
+      "screen": "1920x1080",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
       "anonymizedIp": "1:0000",
       "consentAccepted": true
     }
