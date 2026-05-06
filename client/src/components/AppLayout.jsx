@@ -1,4 +1,3 @@
-import StaggeredMenu from "./StaggeredMenu.jsx";
 import FooterCarousel from "./FooterCarousel.jsx";
 
 const TABS = [
@@ -11,26 +10,29 @@ const TABS = [
 ];
 
 export default function AppLayout({ onTabChange, activeTab, children }) {
-  const items = TABS.map((tab) => ({
-    label: tab.label,
-    link: "#",
-    ariaLabel: tab.label,
-    onClick: () => onTabChange(tab.id),
-  }));
-
   return (
     <>
-      <StaggeredMenu
-        isFixed
-        items={items}
-        colors={["#2b6a4f", "#b6893f"]}
-        accentColor="#b6893f"
-        menuButtonColor="#e8eaed"
-        openMenuButtonColor="#fff"
-        displaySocials={false}
-        displayItemNumbering
-        logoAlt="Tullidos"
-      />
+      <header className="app-header">
+        <div className="app-brand" aria-label="Tullidos SoloQ Ladder">
+          <span className="app-brand__title">Tullidos</span>
+          <span className="app-brand__subtitle">SoloQ Ladder</span>
+        </div>
+
+        <nav className="app-nav" aria-label="Secciones principales">
+          {TABS.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              className={`app-nav__item ${activeTab === tab.id ? "is-active" : ""}`}
+              onClick={() => onTabChange(tab.id)}
+              aria-current={activeTab === tab.id ? "page" : undefined}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+      </header>
+
       <div className="page-content">{children}</div>
       {! ["users", "admin"].includes(activeTab) && <FooterCarousel />}
     </>

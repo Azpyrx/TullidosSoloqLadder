@@ -48,14 +48,14 @@
     "mote": "Joko"
   },
   {
-    "gameName": "łm not perfect",
-    "tagLine": "EUW",
+    "gameName": "everyone muted",
+    "tagLine": "Fac",
     "puuid": "JerNZVGkZkzGVINp0ixURpVc4ayM4qfwutfQQNphZ3s-aEn5UYxw7BHNFD2lOVlTFf3_Y7IYYvJsgg",
     "mote": "Guantes"
   },
   {
     "gameName": "Herion",
-    "tagLine": "TOP",
+    "tagLine": "SUPP",
     "puuid": "pfeIffhk5hngUbWZasc9DwPhQCRBuzg52M0ZCsooatbFEUMgyAIQTAXi-gbXK26Bha55WkjIc9G4zQ",
     "mote": "Alex"
   },
@@ -91,15 +91,20 @@
     "mote": "Lucas"
   },
   {
-    "gameName": "AlexMago",
-    "tagLine": "EUW",
-    "puuid": "O_gK25JOSxNNHa3FW8tdO3vmfEjS1ych2thDco1XJZx2Lga36os_VlDGroUrIMGCjmArZtz_rRTudw",
-    "mote": "Mago"
+    "gameName": "Love is a lie",
+    "tagLine": "Alone",
+    "puuid": "T2gWAKefDEQy_cMx_a0EH85ylnhQ00n2qzNEIV8VyUjo13ATYNJtiNawlEG2F9iB1oSF4imXXKRW7Q"
   },
   {
-    "gameName": "clau",
-    "tagLine": "ttv",
-    "puuid": "Jen2jn8vTu6XzNEIlEIoqUE8ajP0e1886UhEgElxM__p1xpYeiIdWTNhFBHnKypEuAXxE_NW1J2s8Q",
-    "mote": "Claudi"
+    "gameName": "FIama",
+    "tagLine": "EUW",
+    "puuid": "A_ojo1OoPrjq2ZD9VwPZWTZNyH71pWWkcOFOYcnqbKOUbZPnRkCEkNx5sKo_yJEG87rg1ztE9V0-LA",
+    "mote": "Flamilla"
+  },
+  {
+    "gameName": "melon pan",
+    "tagLine": "7027",
+    "puuid": "cNJBvHUlKPjgU88GMq1EV2lO4illblCV2tyViU1lKxpg4ZfBTSyFE6EiBvR5XrD8s3WaD2SRuGv-2g",
+    "mote": "Mati"
   }
 ]

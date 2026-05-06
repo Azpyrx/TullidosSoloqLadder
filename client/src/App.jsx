@@ -1,6 +1,7 @@
 ﻿import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import "./index.css";
 import AppLayout from "./components/AppLayout.jsx";
+import LetterGlitch from "./components/LetterGlitch.jsx";
 import Masonry from "react-masonry-css";
 import AdminPanel from "./components/AdminPanel.jsx";
 import PrivacyPage from "./components/PrivacyPage.jsx";
@@ -14,6 +15,11 @@ const API_BASE = SHOULD_IGNORE_LOCAL_API_IN_PROD
 const API = API_BASE;
 const CONSENT_STORAGE_KEY = "tsl-analytics-consent";
 const PROFILE_PLATFORM_STORAGE_KEY = "tsl-favorite-platform";
+const TIERLIST_TIERS = ["S", "A", "B", "C", "D"];
+
+function createEmptyTierlist() {
+  return Object.fromEntries(TIERLIST_TIERS.map((tier) => [tier, []]));
+}
 
 const PROFILE_PLATFORM_OPTIONS = [
   {
@@ -186,6 +192,8 @@ const PLAYER_OWNER_ALIASES = {
   "azpy#1337": "Azpy",
   "newjeans hanni#1975": "Azpy",
   "shambles#125": "Azpy",
+  "heartbreaker#euw": "Azpy",
+  "heartbreaker#love": "Azpy",
   "leruno#gzzz": "leruno",
   "marlboro#fumas": "leruno",
   "slayer psycho#euw": "Guantes",
@@ -204,6 +212,7 @@ function getPlayerOwner(player) {
   if (altOf) return altOf;
 
   const normalizedId = riotId.toLowerCase();
+  if (normalizedId.startsWith("heartbreaker#")) return "Azpy";
   return PLAYER_OWNER_ALIASES[normalizedId] || riotId;
 }
 
@@ -807,6 +816,8 @@ export default function App() {
   const [error, setError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [filterRole, setFilterRole] = useState("ALL");
+  const [manualTierlist, setManualTierlist] = useState(() => createEmptyTierlist());
+  const [selectedTierPlayerKey, setSelectedTierPlayerKey] = useState(null);
   const [rankingMode, setRankingMode] = useState("combined");
   const [rankingQueueSort, setRankingQueueSort] = useState("soloq");
 
@@ -956,6 +967,15 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(PROFILE_PLATFORM_STORAGE_KEY, preferredPlatform);
   }, [preferredPlatform]);
+
+  useEffect(() => {
+    document.body.dataset.page = activeTab;
+    return () => {
+      if (document.body.dataset.page === activeTab) {
+        delete document.body.dataset.page;
+      }
+    };
+  }, [activeTab]);
 
 
 
@@ -1147,6 +1167,8 @@ export default function App() {
     return Array.from(groups.entries()).map(([owner, accounts]) => {
       const sortedByScore = [...accounts].sort((a, b) => getSoloqScore(b) - getSoloqScore(a));
       const bestSoloqAccount = sortedByScore[0] || null;
+      const sortedByFlexScore = [...accounts].sort((a, b) => getFlexScore(b) - getFlexScore(a));
+      const bestFlexAccount = sortedByFlexScore[0] || null;
       const inGameAccount = sortedByScore.find((a) => Boolean(a?.inGame)) || null;
       const primaryRiotId = bestSoloqAccount?.riotId || null;
       const mergedTopChampions = getTopChampionsFromAccounts(accounts);
@@ -1169,9 +1191,12 @@ export default function App() {
           .slice(0, 2),
         altAccountsHiddenCount: Math.max(0, accounts.length - 1 - 2),
         accountCount: accounts.length,
+        allAccounts: accounts,
         inGame: accounts.some((a) => Boolean(a?.inGame)),
         inGameRiotId: inGameAccount?.riotId || null,
         soloq: bestSoloqAccount?.soloq ? { ...bestSoloqAccount.soloq } : null,
+        flex: bestFlexAccount?.flex ? { ...bestFlexAccount.flex } : null,
+        flexAccountRiotId: bestFlexAccount?.riotId || null,
       };
     });
   }, [players]);
@@ -1186,13 +1211,16 @@ export default function App() {
             : [grouped];
           const sortedByQueue = [...accounts].sort((a, b) => queueScore(b) - queueScore(a));
           const bestQueueAccount = sortedByQueue[0] || grouped;
+          const bestSoloqAccount = [...accounts].sort((a, b) => getSoloqScore(b) - getSoloqScore(a))[0] || grouped;
+          const bestFlexAccount = [...accounts].sort((a, b) => getFlexScore(b) - getFlexScore(a))[0] || grouped;
           return {
             ...grouped,
             profileIconId: bestQueueAccount?.profileIconId || grouped?.profileIconId,
             // Keep SOLOQ-best account for external profile links in combined mode.
             mainAccountRiotId: grouped?.mainAccountRiotId || grouped?.riotId || null,
-            soloq: bestQueueAccount?.soloq ? { ...bestQueueAccount.soloq } : grouped?.soloq || null,
-            flex: bestQueueAccount?.flex ? { ...bestQueueAccount.flex } : grouped?.flex || null,
+            soloq: bestSoloqAccount?.soloq ? { ...bestSoloqAccount.soloq } : grouped?.soloq || null,
+            flex: bestFlexAccount?.flex ? { ...bestFlexAccount.flex } : grouped?.flex || null,
+            flexAccountRiotId: bestFlexAccount?.riotId || grouped?.flexAccountRiotId || null,
           };
         })
         .sort((a, b) => queueScore(b) - queueScore(a));
@@ -1239,11 +1267,6 @@ export default function App() {
     })[0] || null;
   }, [activityFeed]);
 
-  const duelConfig = ["Hachitas", "Ryt"];
-  const duelNicknames = {
-    hachitas: "YEREMIAS",
-    ryt: "X RYT GIRO COMPLETO",
-  };
   const groupedPlayersByOwner = useMemo(() => {
     const map = new Map();
     for (const player of groupedPlayers) {
@@ -1253,6 +1276,7 @@ export default function App() {
     }
     return map;
   }, [groupedPlayers]);
+
   const openOpggForPlayer = useCallback((player) => {
     const targetRiotId = player?.mainAccountRiotId || player?.riotId || null;
     const profileUrl = getPreferredPlatformUrl(targetRiotId, preferredPlatform);
@@ -1270,11 +1294,13 @@ export default function App() {
     event.preventDefault();
     openOpggForPlayer(player);
   }, [openOpggForPlayer]);
+
   const handleOpenActivityEntryKeyDown = useCallback((event, entry) => {
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
     openOpggUrl(buildOpggMatchUrlFromEntry(entry));
   }, [openOpggUrl]);
+
   const handleShowSampleRankingPopup = useCallback(() => {
     if (!latestActivityEntry) return;
     const previewEntry = {
@@ -1283,26 +1309,8 @@ export default function App() {
     };
     setRankingActivityPopup(previewEntry);
   }, [latestActivityEntry]);
+
   const preferredPlatformLabel = PROFILE_PLATFORM_OPTIONS.find((platform) => platform.key === preferredPlatform)?.label || "OP.GG";
-  const duelPlayers = duelConfig.map((owner) => groupedPlayersByOwner.get(owner.toLowerCase()) || null);
-  const duelLpA = duelPlayers[0]?.soloq?.leaguePoints ?? null;
-  const duelLpB = duelPlayers[1]?.soloq?.leaguePoints ?? null;
-  const duelLpTextA = duelLpA !== null ? `${duelLpA} LP` : "—";
-  const duelLpTextB = duelLpB !== null ? `${duelLpB} LP` : "—";
-  const duelRankTextA = duelPlayers[0]?.soloq ? `${duelPlayers[0].soloq.tier} ${duelPlayers[0].soloq.rank}` : "Sin rank";
-  const duelRankTextB = duelPlayers[1]?.soloq ? `${duelPlayers[1].soloq.tier} ${duelPlayers[1].soloq.rank}` : "Sin rank";
-  const duelRankClassA = getTierClass(duelPlayers[0]?.soloq?.tier);
-  const duelRankClassB = getTierClass(duelPlayers[1]?.soloq?.tier);
-  const duelRankIconA = duelPlayers[0]?.soloq?.tier ? RANK_ICONS[duelPlayers[0].soloq.tier] : null;
-  const duelRankIconB = duelPlayers[1]?.soloq?.tier ? RANK_ICONS[duelPlayers[1].soloq.tier] : null;
-  const duelScoreA = getSoloqScore(duelPlayers[0]);
-  const duelScoreB = getSoloqScore(duelPlayers[1]);
-  const duelHasBoth = duelScoreA >= 0 && duelScoreB >= 0;
-  const duelWinnerIndex = duelHasBoth ? (duelScoreA === duelScoreB ? -1 : duelScoreA > duelScoreB ? 0 : 1) : -1;
-  const duelWinnerName =
-    duelHasBoth && duelWinnerIndex !== -1
-      ? duelNicknames[duelConfig[duelWinnerIndex].toLowerCase()] || duelPlayers[duelWinnerIndex]?.riotId
-      : null;
 
   const usersMasonryPlayers = useMemo(() => {
     const dedupedMap = new Map();
@@ -1427,12 +1435,316 @@ export default function App() {
   const bestSoloToday = dailyHighlights?.bestSoloqGain || null;
   const bestFlexToday = dailyHighlights?.bestFlexGain || null;
   const worstSoloToday = dailyHighlights?.worstSoloqLoss || null;
-  const worstOverallToday = dailyHighlights?.worstOverallLoss || null;
-  const worstToday = worstOverallToday || worstSoloToday;
+  const worstFlexToday = dailyHighlights?.worstFlexLoss || null;
   const apiTodayRequests = Number(apiStatus?.todayRequests) || 0;
   const currentHour = new Date().getHours();
   const elapsedHoursToday = Math.max(1, currentHour + 1);
   const apiRequestsPerHour = Math.round(apiTodayRequests / elapsedHoursToday);
+  const formatDailyHighlightDetail = (highlight, fallback) => {
+    if (!highlight) return fallback;
+    const currentLp = Number(highlight.currentLp);
+    return Number.isFinite(currentLp)
+      ? `${formatLpDelta(highlight.deltaLp)} · ${currentLp} LP actuales`
+      : formatLpDelta(highlight.deltaLp);
+  };
+  const tierlistPlayersByKey = useMemo(() => {
+    const map = new Map();
+    for (const player of groupedPlayers) {
+      const key = String(player?.groupKey || player?.riotId || "").trim();
+      if (key) map.set(key, player);
+    }
+    return map;
+  }, [groupedPlayers]);
+  const autoTierlist = useMemo(() => {
+    const tiers = createEmptyTierlist();
+    const tierForIndex = (index, total, score) => {
+      if (!Number.isFinite(score) || score < 0) return "D";
+      const ratio = total <= 1 ? 0 : index / total;
+      if (ratio < 0.12) return "S";
+      if (ratio < 0.32) return "A";
+      if (ratio < 0.58) return "B";
+      if (ratio < 0.82) return "C";
+      return "D";
+    };
+    const ordered = groupedPlayers
+      .filter((player) => Boolean(player?.riotId))
+      .map((player) => ({ ...player, tierScore: getSoloqScore(player) }))
+      .sort((a, b) => b.tierScore - a.tierScore);
+
+    ordered.forEach((player, index) => {
+      const key = String(player?.groupKey || player?.riotId || "").trim();
+      if (!key) return;
+      const tier = tierForIndex(index, ordered.length, player.tierScore);
+      tiers[tier].push(key);
+    });
+    return tiers;
+  }, [groupedPlayers]);
+  useEffect(() => {
+    setManualTierlist((prev) => {
+      const validKeys = new Set(tierlistPlayersByKey.keys());
+      const next = createEmptyTierlist();
+      const placed = new Set();
+
+      for (const tier of TIERLIST_TIERS) {
+        for (const key of prev[tier] || []) {
+          if (!validKeys.has(key) || placed.has(key)) continue;
+          next[tier].push(key);
+          placed.add(key);
+        }
+      }
+
+      for (const tier of TIERLIST_TIERS) {
+        for (const key of autoTierlist[tier] || []) {
+          if (!validKeys.has(key) || placed.has(key)) continue;
+          next[tier].push(key);
+          placed.add(key);
+        }
+      }
+
+      return next;
+    });
+  }, [autoTierlist, tierlistPlayersByKey]);
+  const moveTierPlayer = useCallback((playerKey, targetTier, targetIndex = null) => {
+    if (!playerKey || !TIERLIST_TIERS.includes(targetTier)) return;
+    setManualTierlist((prev) => {
+      const next = createEmptyTierlist();
+      for (const tier of TIERLIST_TIERS) {
+        next[tier] = (prev[tier] || []).filter((key) => key !== playerKey);
+      }
+      const safeIndex = Number.isFinite(Number(targetIndex))
+        ? Math.max(0, Math.min(Number(targetIndex), next[targetTier].length))
+        : next[targetTier].length;
+      next[targetTier].splice(safeIndex, 0, playerKey);
+      return next;
+    });
+    setSelectedTierPlayerKey(playerKey);
+  }, []);
+  const handleTierDrop = useCallback((event, tier, targetIndex = null) => {
+    event.preventDefault();
+    const draggedKey = event.dataTransfer.getData("text/plain") || selectedTierPlayerKey;
+    moveTierPlayer(draggedKey, tier, targetIndex);
+  }, [moveTierPlayer, selectedTierPlayerKey]);
+  const handleDownloadTierlistImage = useCallback(async () => {
+    const rows = TIERLIST_TIERS.map((tier) => ({
+      tier,
+      players: (manualTierlist[tier] || [])
+        .map((key) => tierlistPlayersByKey.get(key))
+        .filter(Boolean),
+    }));
+    const canvas = document.createElement("canvas");
+    const scale = 2;
+    const width = 1320;
+    const rowHeight = 156;
+    const padding = 32;
+    const headerHeight = 82;
+    const height = headerHeight + rows.length * rowHeight + padding;
+    canvas.width = width * scale;
+    canvas.height = height * scale;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(scale, scale);
+
+    const loadImage = (src) => new Promise((resolve) => {
+      if (!src) return resolve(null);
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = src;
+    });
+
+    ctx.fillStyle = "#070b12";
+    ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = "#f4f9ff";
+    ctx.font = "900 34px Trebuchet MS, Segoe UI, sans-serif";
+    ctx.fillText("TIERLIST DEL GRUPO", padding, 50);
+    ctx.font = "800 15px Trebuchet MS, Segoe UI, sans-serif";
+    ctx.fillStyle = "#93bae0";
+    ctx.fillText("SoloQ Ladder", padding, 73);
+
+    const tierColors = { S: "#ff7f7f", A: "#ffbf7f", B: "#ffdf80", C: "#bfff7f", D: "#7fbfff" };
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+      const { tier, players: tierPlayers } = rows[rowIndex];
+      const y = headerHeight + rowIndex * rowHeight;
+      ctx.fillStyle = "rgba(255,255,255,0.08)";
+      ctx.fillRect(padding, y, width - padding * 2, rowHeight - 8);
+      ctx.fillStyle = tierColors[tier] || "#999";
+      ctx.fillRect(padding, y, 88, rowHeight - 8);
+      ctx.fillStyle = "#121212";
+      ctx.font = "1000 48px Trebuchet MS, Segoe UI, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(tier, padding + 44, y + 92);
+      ctx.textAlign = "left";
+
+      let x = padding + 110;
+      for (const player of tierPlayers) {
+        const displayName = player.emote || player.riotId || "Jugador";
+        const iconUrl = player.profileIconId
+          ? `https://ddragon.leagueoflegends.com/cdn/${ddragonVersion}/img/profileicon/${player.profileIconId}.png`
+          : null;
+        const img = await loadImage(iconUrl);
+        if (img) {
+          ctx.drawImage(img, x, y + 16, 82, 82);
+        } else {
+          ctx.fillStyle = "#1a2332";
+          ctx.fillRect(x, y + 16, 82, 82);
+          ctx.fillStyle = "#eaf4ff";
+          ctx.font = "900 32px Trebuchet MS, Segoe UI, sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText(String(displayName).slice(0, 1).toUpperCase(), x + 41, y + 68);
+          ctx.textAlign = "left";
+        }
+        ctx.strokeStyle = "rgba(255,255,255,0.35)";
+        ctx.strokeRect(x, y + 16, 82, 82);
+        ctx.fillStyle = "#dceaff";
+        ctx.font = "800 13px Trebuchet MS, Segoe UI, sans-serif";
+        const shortName = String(displayName).slice(0, 14);
+        ctx.fillText(shortName, x, y + 121);
+        x += 104;
+        if (x > width - 110) break;
+      }
+    }
+
+    const link = document.createElement("a");
+    link.download = `tierlist-soloq-${new Date().toISOString().slice(0, 10)}.png`;
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  }, [ddragonVersion, manualTierlist, tierlistPlayersByKey]);
+  const dailyActivityPanel = (
+    <div className="ranking-side-outer">
+      <div className="activity-section">
+        <div className="activity-section__header">
+          <h3 className="activity-title">ACTIVIDAD DIARIA</h3>
+        </div>
+        <div className="activity-grid">
+          <div className="activity-card activity-card--winner">
+            <div className="activity-card__top">
+              <span className="activity-queue-pill">SOLOQ</span>
+              <span className="activity-label">Ganador LPs hoy</span>
+            </div>
+            <span className="activity-delta-hero activity-delta-hero--up">{bestSoloToday ? formatSignedLps(bestSoloToday.deltaLp) : "--"}</span>
+            <span className="activity-value">{bestSoloToday?.player || "Sin datos"}</span>
+            <span className="activity-detail">{formatDailyHighlightDetail(bestSoloToday, "Sin ganancias SOLOQ hoy")}</span>
+          </div>
+          <div className="activity-card activity-card--loser">
+            <div className="activity-card__top">
+              <span className="activity-queue-pill">SOLOQ</span>
+              <span className="activity-label">Perdedor LPs hoy</span>
+            </div>
+            <span className="activity-delta-hero activity-delta-hero--down">{worstSoloToday ? formatLossLps(worstSoloToday.deltaLp) : "--"}</span>
+            <span className="activity-value">{worstSoloToday?.player || "Sin datos"}</span>
+            <span className="activity-detail">{formatDailyHighlightDetail(worstSoloToday, "Sin perdidas SOLOQ hoy")}</span>
+          </div>
+          <div className="activity-card activity-card--winner">
+            <div className="activity-card__top">
+              <span className="activity-queue-pill activity-queue-pill--flex">FLEX</span>
+              <span className="activity-label">Ganador LPs hoy</span>
+            </div>
+            <span className="activity-delta-hero activity-delta-hero--up">{bestFlexToday ? formatSignedLps(bestFlexToday.deltaLp) : "--"}</span>
+            <span className="activity-value">{bestFlexToday?.player || "Sin datos"}</span>
+            <span className="activity-detail">{formatDailyHighlightDetail(bestFlexToday, "Sin ganancias FLEX hoy")}</span>
+          </div>
+          <div className="activity-card activity-card--loser">
+            <div className="activity-card__top">
+              <span className="activity-queue-pill activity-queue-pill--flex">FLEX</span>
+              <span className="activity-label">Perdedor LPs hoy</span>
+            </div>
+            <span className="activity-delta-hero activity-delta-hero--down">{worstFlexToday ? formatLossLps(worstFlexToday.deltaLp) : "--"}</span>
+            <span className="activity-value">{worstFlexToday?.player || "Sin datos"}</span>
+            <span className="activity-detail">{formatDailyHighlightDetail(worstFlexToday, "Sin perdidas FLEX hoy")}</span>
+          </div>
+        </div>
+      </div>
+      <div className="tierlist-section">
+        <div className="activity-section__header tierlist-section__header">
+          <h3 className="activity-title">TIERLIST DEL GRUPO</h3>
+          <button
+            type="button"
+            className="tierlist-download-btn"
+            onClick={handleDownloadTierlistImage}
+            title="Descargar imagen de la tierlist"
+          >
+            Sacar imagen
+          </button>
+        </div>
+        {selectedTierPlayerKey && (
+          <div className="tierlist-movebar" aria-label="Mover jugador seleccionado">
+            {TIERLIST_TIERS.map((tier) => (
+              <button
+                type="button"
+                key={tier}
+                onClick={() => moveTierPlayer(selectedTierPlayerKey, tier)}
+                title={`Mover seleccionado a ${tier}`}
+              >
+                {tier}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="summoner-tierlist">
+          {TIERLIST_TIERS.map((tier) => (
+            <div
+              className={`summoner-tier summoner-tier--${tier.toLowerCase()}`}
+              key={tier}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => handleTierDrop(event, tier)}
+              onClick={() => {
+                if (selectedTierPlayerKey) moveTierPlayer(selectedTierPlayerKey, tier);
+              }}
+            >
+              <div className="summoner-tier__label">{tier}</div>
+              <div className="summoner-tier__players">
+                {(manualTierlist[tier] || []).length === 0 ? (
+                  <span className="summoner-tier__empty">Vacío</span>
+                ) : (
+                  (manualTierlist[tier] || []).map((playerKey, playerIndex) => {
+                    const player = tierlistPlayersByKey.get(playerKey);
+                    if (!player) return null;
+                    const rankText = player.soloq
+                      ? `${player.soloq.tier} ${player.soloq.rank} · ${player.soloq.leaguePoints} LP`
+                      : "Sin rank SoloQ";
+                    const displayName = player.emote || player.riotId;
+                    return (
+                      <div
+                        className={`summoner-tier__chip ${selectedTierPlayerKey === playerKey ? "is-selected" : ""}`}
+                        key={playerKey}
+                        title={`${displayName} · ${rankText}`}
+                        draggable
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSelectedTierPlayerKey((current) => current === playerKey ? null : playerKey);
+                        }}
+                        onDragStart={(event) => {
+                          event.dataTransfer.setData("text/plain", playerKey);
+                          event.dataTransfer.effectAllowed = "move";
+                          setSelectedTierPlayerKey(playerKey);
+                        }}
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={(event) => {
+                          event.stopPropagation();
+                          handleTierDrop(event, tier, playerIndex);
+                        }}
+                      >
+                        {player.profileIconId ? (
+                          <img
+                            src={`https://ddragon.leagueoflegends.com/cdn/${ddragonVersion}/img/profileicon/${player.profileIconId}.png`}
+                            alt={displayName}
+                            loading="lazy"
+                          />
+                        ) : (
+                          <span>{String(displayName || "?").slice(0, 1).toUpperCase()}</span>
+                        )}
+                        <small>{displayName}</small>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
   const rankingPopupMatchUrl = rankingActivityPopup ? buildOpggMatchUrlFromEntry(rankingActivityPopup) : null;
 
   const rankingContent = (
@@ -1466,365 +1778,272 @@ export default function App() {
                   alt={rankingActivityPopup.championName}
                   onError={(e) => { e.target.style.display = "none"; }}
                 />
-              ) : null}
-              <strong className="rank-activity-popup__player">{rankingActivityPopup.player || "Jugador"}</strong>
+              ) : (
+                <span className="rank-activity-popup__champ rank-activity-popup__champ--empty">?</span>
+              )}
+              <div className="rank-activity-popup__main">
+                <strong className="rank-activity-popup__player">{rankingActivityPopup.player || "Jugador"}</strong>
+                <span className="rank-activity-popup__queue">SOLOQ · partida terminada</span>
+              </div>
               <span className={`rank-activity-popup__delta ${Number(rankingActivityPopup.lpDelta) < 0 ? "is-down" : "is-up"}`}>
                 {Number(rankingActivityPopup.lpDelta) > 0 ? `+${rankingActivityPopup.lpDelta}` : rankingActivityPopup.lpDelta} LP
               </span>
             </div>
-            <p className="rank-activity-popup__text">{formatActivityText(rankingActivityPopup.text) || "Acaba de terminar partida"}</p>
-            {rankingActivityPopup.kda && <span className="rank-activity-popup__kda">KDA: {rankingActivityPopup.kda}</span>}
+            <p className="rank-activity-popup__text">{formatActivityText(rankingActivityPopup.text) || "Acaba de terminar una ranked."}</p>
+            <div className="rank-activity-popup__stats" aria-label="Detalles de la partida">
+              <span><strong>Campeon</strong>{rankingActivityPopup.championName || "s/d"}</span>
+              <span><strong>KDA</strong>{rankingActivityPopup.kda || "s/d"}</span>
+              <span><strong>Resultado</strong>{Number(rankingActivityPopup.lpDelta) >= 0 ? "Subida de LP" : "Bajada de LP"}</span>
+            </div>
           </article>
         </div>
       )}
 
+      <div className="ranking-flex-wrapper">
+        <div className="ranking-container">
+          <div className="ranking-main">
+              <div className="rank-topbar">
+                <div className="rank-controls">
+                  <div className="rank-search">
+                    <input
+                      type="text"
+                      placeholder="Buscar jugador..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                    />
+                  </div>
+                  <div className="role-pills">
+                    <button
+                      type="button"
+                      className={`rank-mode-switch ${rankingMode === "all" ? "is-all" : "is-combined"}`}
+                      role="switch"
+                      aria-checked={rankingMode === "all"}
+                      aria-label="Cambiar modo de ranking entre Combinado y Todas las cuentas"
+                      title={rankingMode === "all" ? "Modo actual: Todas las cuentas" : "Modo actual: Combinado"}
+                      onClick={() => setRankingMode((prev) => (prev === "combined" ? "all" : "combined"))}
+                    >
+                      <span className="rank-mode-label">Combinado</span>
+                      <span className="rank-mode-track" aria-hidden="true">
+                        <span className="rank-mode-thumb" />
+                      </span>
+                      <span className="rank-mode-label">Todas las cuentas</span>
+                    </button>
+                    {[
+                      "ALL", "TOP", "JUNGLE", "MID", "BOTTOM", "UTILITY"
+                    ].map((role) => (
+                      <button
+                        key={role}
+                        className={`role-pill ${filterRole === role ? "active" : ""}`}
+                        onClick={() => setFilterRole(role)}
+                        title={role === "ALL" ? "Todos" : ROLE_LABELS[role]}
+                      >
+                        {role === "ALL" ? (
+                          "Todos"
+                        ) : (
+                          <img
+                            src={ROLE_ICONS[role]}
+                            alt={ROLE_LABELS[role]}
+                            className="role-pill-icon"
+                            onError={(e) => { e.target.style.display = "none"; }}
+                          />
+                        )}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      className="rank-users-shortcut"
+                      onClick={() => setActiveTab("users")}
+                      title="Ir a usuarios"
+                    >
+                      Usuarios
+                    </button>
 
-      <section className="duel-card">
-        <div className="duel-head">
-          {/* Texto de apuesta eliminado */}
-        </div>
-
-        <div className="duel-board">
-          {duelConfig.map((owner, idx) => {
-            const player = duelPlayers[idx];
-            const isWinner = duelWinnerIndex === idx;
-            const iconId = player?.profileIconId;
-            return (
-              <div
-                key={owner}
-                className={`duel-slot ${idx === 0 ? "duel-slot--left" : "duel-slot--right"} ${isWinner ? "is-winner" : ""}`}
-              >
-                {iconId ? (
-                  <img
-                    className="duel-icon"
-                    src={`https://ddragon.leagueoflegends.com/cdn/${ddragonVersion}/img/profileicon/${iconId}.png`}
-                    alt={player?.riotId || owner}
-                  />
-                ) : (
-                  <div className="duel-icon duel-icon--placeholder">?</div>
-                )}
-                <div className="duel-meta">
-                  <span className="duel-label">{idx === 0 ? "Jugador 1" : "Jugador 2"}</span>
-                  <strong className="duel-name">{duelNicknames[owner.toLowerCase()] || player?.riotId || owner}</strong>
-                  <span className="duel-tier">{player?.altAccounts?.[0] || player?.riotId || owner}</span>
-                  <span className="duel-tier">{player?.soloq ? `${player.soloq.tier} ${player.soloq.rank}` : "Sin rank"}</span>
+                  </div>
                 </div>
               </div>
-            );
-          })}
 
-          <div className="duel-center-elo">
-            <div className="duel-center-side">
-              <span className={`duel-center-lp ${duelWinnerIndex === 0 ? "is-winner" : ""}`}>{duelLpTextA}</span>
-              <span className={`duel-center-rank tier-${duelRankClassA}`}>
-                {duelRankIconA && <img className="duel-center-rank-icon" src={duelRankIconA} alt={duelRankTextA} />}
-                {duelRankTextA}
-              </span>
-            </div>
-            <div className="duel-vs">VS</div>
-            <div className="duel-center-side">
-              <span className={`duel-center-lp ${duelWinnerIndex === 1 ? "is-winner" : ""}`}>{duelLpTextB}</span>
-              <span className={`duel-center-rank tier-${duelRankClassB}`}>
-                {duelRankIconB && <img className="duel-center-rank-icon" src={duelRankIconB} alt={duelRankTextB} />}
-                {duelRankTextB}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <div className={`duel-result ${duelHasBoth ? (duelWinnerIndex === -1 ? "is-draw" : "is-live") : ""}`}>
-          {duelHasBoth
-            ? duelWinnerIndex === -1
-              ? "Empate total de LP"
-              : `Lider claro: ${duelWinnerName} (ELO superior)`
-            : "Esperando datos en ladder cache para ambos jugadores"}
-        </div>
-      </section>
-
-      <div className="activity-section">
-        <div className="activity-section__header">
-          <h3 className="activity-title">ACTIVIDAD</h3>
-          <div className="activity-meta-pills">
-            <span className="activity-meta-pill">👥 {players.length} jugadores</span>
-            <span className="activity-meta-pill">🎮 {rankedPlayers.length} rankeados</span>
-            <span className="activity-meta-pill">📡 API: /h {apiRequestsPerHour} · dia {apiTodayRequests}</span>
-            <button
-              type="button"
-              className="activity-meta-pill activity-meta-pill--button"
-              onClick={handleShowSampleRankingPopup}
-              disabled={!latestActivityEntry}
-              title={latestActivityEntry ? "Mostrar ejemplo de popup gigante" : "Sin actividad reciente para mostrar"}
-            >
-              Probar popup enorme
-            </button>
-          </div>
-        </div>
-
-        <div className="activity-grid">
-          <div className="activity-card activity-card--winner">
-            <span className="activity-label">Ganador LPs hoy (SOLOQ)</span>
-            <span className="activity-value">{bestSoloToday?.player || "—"}</span>
-            <span className="activity-delta-hero activity-delta-hero--up">{bestSoloToday ? formatSignedLps(bestSoloToday.deltaLp) : "—"}</span>
-            <span className="activity-detail">{bestSoloToday ? formatLpDelta(bestSoloToday.deltaLp) : "—"}</span>
-          </div>
-
-          <div className="activity-card activity-card--winner">
-            <span className="activity-label">Ganador LPs hoy (FLEX)</span>
-            <span className="activity-value">{bestFlexToday?.player || "—"}</span>
-            <span className="activity-delta-hero activity-delta-hero--up">{bestFlexToday ? formatSignedLps(bestFlexToday.deltaLp) : "—"}</span>
-            <span className="activity-detail">{bestFlexToday ? formatLpDelta(bestFlexToday.deltaLp) : "—"}</span>
-          </div>
-
-          <div className="activity-card activity-card--signals">
-            <span className="activity-label">Señales</span>
-            <ActivityTicker groupedPlayers={groupedPlayers} />
-          </div>
-
-          <div className="activity-card activity-card--loser">
-            <span className="activity-label">Perdedor LPs hoy (global)</span>
-            <span className="activity-value">{worstToday?.player || "—"}</span>
-            <span className="activity-delta-hero activity-delta-hero--down">{worstToday ? formatLossLps(worstToday.deltaLp) : "—"}</span>
-            <span className="activity-detail">{worstToday ? formatLpDelta(worstToday.deltaLp) : "—"}</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="rank-topbar">
-        <div className="rank-controls">
-          <div className="rank-search">
-            <input
-              type="text"
-              placeholder="Buscar jugador..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-          </div>
-          <div className="role-pills">
-            <button
-              type="button"
-              className={`rank-mode-switch ${rankingMode === "all" ? "is-all" : "is-combined"}`}
-              role="switch"
-              aria-checked={rankingMode === "all"}
-              aria-label="Cambiar modo de ranking entre Combinado y Todas las cuentas"
-              title={rankingMode === "all" ? "Modo actual: Todas las cuentas" : "Modo actual: Combinado"}
-              onClick={() => setRankingMode((prev) => (prev === "combined" ? "all" : "combined"))}
-            >
-              <span className="rank-mode-label">Combinado</span>
-              <span className="rank-mode-track" aria-hidden="true">
-                <span className="rank-mode-thumb" />
-              </span>
-              <span className="rank-mode-label">Todas las cuentas</span>
-            </button>
-            {["ALL", "TOP", "JUNGLE", "MID", "BOTTOM", "UTILITY"].map((role) => (
-              <button
-                key={role}
-                className={`role-pill ${filterRole === role ? "active" : ""}`}
-                onClick={() => setFilterRole(role)}
-                title={role === "ALL" ? "Todos" : ROLE_LABELS[role]}
-              >
-                {role === "ALL" ? (
-                  "Todos"
-                ) : (
-                  <img
-                    src={ROLE_ICONS[role]}
-                    alt={ROLE_LABELS[role]}
-                    className="role-pill-icon"
-                    onError={(e) => { e.target.style.display = "none"; }}
-                  />
-                )}
-              </button>
-            ))}
-            <button
-              type="button"
-              className="rank-users-shortcut"
-              onClick={() => setActiveTab("users")}
-              title="Ir a usuarios"
-            >
-              Usuarios
-            </button>
-
-          </div>
-        </div>
-      </div>
-
-      {loading ? (
-        <div className="loading">Cargando ladder...</div>
-      ) : (
-        <>
-          <div className="rank-col-header">
-            <span className="rank-col-header__pos">#</span>
-            <span className="rank-col-header__player">JUGADOR</span>
-            <span className="rank-col-header__champs">TOP CHAMPS</span>
-            <span className="rank-col-header__role">ROL</span>
-            <div className="rank-col-header__elo rank-col-header__elo-sort">
-              <span>ELO</span>
-              <div className="queue-sort-legend" role="group" aria-label="Ordenar ranking por cola">
-                <button
-                  type="button"
-                  className={`queue-sort-pill ${rankingQueueSort === "soloq" ? "active" : ""}`}
-                  onClick={() => setRankingQueueSort("soloq")}
-                  title="Ordenar por SOLOQ"
-                >
-                  SOLOQ
-                </button>
-                <button
-                  type="button"
-                  className={`queue-sort-pill ${rankingQueueSort === "flex" ? "active" : ""}`}
-                  onClick={() => setRankingQueueSort("flex")}
-                  title="Ordenar por FLEX"
-                >
-                  FLEX
-                </button>
-              </div>
-            </div>
-            <span className="rank-col-header__warns">SEÑALES</span>
-          </div>
-
-          {filteredPlayers.length === 0 ? (
-            <div className="empty">
-              {players.length === 0
-                ? "Añade jugadores con su Riot ID (Nombre#TAG)."
-                : "Ningún resultado para esa búsqueda."}
-            </div>
-          ) : (
-            <div className="ladder">
-              {filteredPlayers.map((p) => {
-                const playerWarnings = buildPlayerWarnings(p);
-                const playerProfileUrl = getPreferredPlatformUrl(p.mainAccountRiotId || p.riotId, preferredPlatform);
-                const deeplolInGameUrl = p.liveGameCached ? buildDeeplolInGameUrlFromRiotId(p.inGameRiotId || p.mainAccountRiotId || p.riotId) : null;
-                const liveGameUrl = deeplolInGameUrl;
-                // Show chip if we know the player is in-game (from cache or live fetch)
-                const showInGameChip = Boolean(p.liveGameCached);
-                const showRiotIdRow = shouldRenderRiotId(p.emote, p.riotId) || showInGameChip;
-                const inGameChipTitle = liveGameUrl ? "Abrir live game en Deeplol" : "Jugador está in game";
-                return (
-                  <div
-                    key={p.groupKey || p.riotId}
-                    className={`player-row ${playerProfileUrl ? "player-row--clickable" : ""} ${p.error ? "player-error" : ""} ${p._rank <= 3 ? `player-top player-top-${p._rank}` : "player-regular"}`}
-                    style={{ "--tier-color": TIER_COLORS[p.soloq?.tier] || "var(--line)" }}
-                    role={playerProfileUrl ? "button" : undefined}
-                    tabIndex={playerProfileUrl ? 0 : undefined}
-                    onClick={playerProfileUrl ? () => openOpggForPlayer(p) : undefined}
-                    onKeyDown={playerProfileUrl ? (event) => handleOpenOpggKeyDown(event, p) : undefined}
-                    title={playerProfileUrl ? `Abrir ${preferredPlatformLabel}: ${p.mainAccountRiotId || p.riotId}` : undefined}
-                  >
-                    <span className="pos">{p._rank}</span>
-
-                    <div className="player-main">
-                      {p.profileIconId && (
-                        <img
-                          className="icon"
-                          src={`https://ddragon.leagueoflegends.com/cdn/${ddragonVersion}/img/profileicon/${p.profileIconId}.png`}
-                          alt=""
-                        />
-                      )}
-                      <div className="player-info">
-                        {p.emote && <span className="riot-emote">{formatMoteDisplay(p.emote)}</span>}
-                        {showRiotIdRow && (
-                          <div className="riot-id-row">
-                            <span className="riot-id">{p.riotId}</span>
-                            {showInGameChip && (
-                              <button
-                                type="button"
-                                className="live-game-chip live-game-chip--inline"
-                                title={inGameChipTitle}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  openOpggUrl(liveGameUrl);
-                                }}
-                                onKeyDown={(event) => {
-                                  if (event.key !== "Enter" && event.key !== " ") return;
-                                  event.preventDefault();
-                                  event.stopPropagation();
-                                  openOpggUrl(liveGameUrl);
-                                }}
-                              >
-                                IN GAME
-                              </button>
-                            )}
-                          </div>
-                        )}
-                        <div className="profile-platforms" aria-label="Perfiles externos">
-                          {getProfilePlatformLinks(p.mainAccountRiotId || p.riotId).map((platform) => (
-                            <button
-                              key={`${p.groupKey || p.riotId}-${platform.key}`}
-                              type="button"
-                              className="profile-platform-btn"
-                              title={`Abrir ${platform.label}`}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                openOpggUrl(platform.url);
-                              }}
-                              onKeyDown={(event) => {
-                                if (event.key !== "Enter" && event.key !== " ") return;
-                                event.preventDefault();
-                                event.stopPropagation();
-                                openOpggUrl(platform.url);
-                              }}
-                            >
-                              <img src={platform.icon} alt={platform.label} />
-                            </button>
-                          ))}
-                        </div>
-                        {p.accountCount > 1 && <span className="riot-alts">Cuenta top: {p.mainAccountRiotId || p.riotId}</span>}
-                        {rankingMode === "all" && p.ownerRiotId && String(p.ownerRiotId).toLowerCase() !== String(p.riotId || "").toLowerCase() && (
-                          <span className="riot-alts">Dueño: {p.ownerRiotId}</span>
-                        )}
-                        {p.altAccounts?.length > 0 && (
-                          <span className="riot-alts">
-                            Smurfs: {p.altAccounts.join(" · ")}
-                            {p.altAccountsHiddenCount > 0 ? ` · +${p.altAccountsHiddenCount}` : ""}
-                          </span>
-                        )}
-                        {p.summonerLevel && <span className="level">Nv. {p.summonerLevel}</span>}
+              {loading ? (
+                <div className="loading">Cargando ladder...</div>
+              ) : (
+                <>
+                  <div className="rank-col-header">
+                    <span className="rank-col-header__pos">#</span>
+                    <span className="rank-col-header__player">JUGADOR</span>
+                    <span className="rank-col-header__champs">TOP CHAMPS</span>
+                    <span className="rank-col-header__role">ROL</span>
+                    <div className="rank-col-header__elo rank-col-header__elo-sort">
+                      <span>ELO</span>
+                      <div className="queue-sort-legend" role="group" aria-label="Ordenar ranking por cola">
+                        <button
+                          type="button"
+                          className={`queue-sort-pill ${rankingQueueSort === "soloq" ? "active" : ""}`}
+                          onClick={() => setRankingQueueSort("soloq")}
+                          title="Ordenar por SOLOQ"
+                        >
+                          SOLOQ
+                        </button>
+                        <button
+                          type="button"
+                          className={`queue-sort-pill ${rankingQueueSort === "flex" ? "active" : ""}`}
+                          onClick={() => setRankingQueueSort("flex")}
+                          title="Ordenar por FLEX"
+                        >
+                          FLEX
+                        </button>
                       </div>
                     </div>
+                    <span className="rank-col-header__warns">SEÑALES</span>
+                  </div>
 
-                    <ChampIcons champions={p.topChampions} version={ddragonVersion} />
-
-                    <div className="role-cell">
-                      <RoleIcon role={p.mainRole} />
+                  {filteredPlayers.length === 0 ? (
+                    <div className="empty">
+                      {players.length === 0
+                        ? "Añade jugadores con su Riot ID (Nombre#TAG)."
+                        : "Ningún resultado para esa búsqueda."}
                     </div>
+                  ) : (
+                    <div className="ladder">
+                      {filteredPlayers.map((p) => {
+                        const playerWarnings = buildPlayerWarnings(p);
+                        const playerProfileUrl = getPreferredPlatformUrl(p.mainAccountRiotId || p.riotId, preferredPlatform);
+                        const deeplolInGameUrl = p.liveGameCached ? buildDeeplolInGameUrlFromRiotId(p.inGameRiotId || p.mainAccountRiotId || p.riotId) : null;
+                        const liveGameUrl = deeplolInGameUrl;
+                        // Show chip if we know the player is in-game (from cache or live fetch)
+                        const showInGameChip = Boolean(p.liveGameCached);
+                        const showRiotIdRow = shouldRenderRiotId(p.emote, p.riotId) || showInGameChip;
+                        const inGameChipTitle = liveGameUrl ? "Abrir live game en Deeplol" : "Jugador está in game";
+                        return (
+                          <div
+                            key={p.groupKey || p.riotId}
+                            className={`player-row ${playerProfileUrl ? "player-row--clickable" : ""} ${p.error ? "player-error" : ""} ${p._rank <= 3 ? `player-top player-top-${p._rank}` : "player-regular"}`}
+                            style={{ "--tier-color": TIER_COLORS[p.soloq?.tier] || "var(--line)" }}
+                            role={playerProfileUrl ? "button" : undefined}
+                            tabIndex={playerProfileUrl ? 0 : undefined}
+                            onClick={playerProfileUrl ? () => openOpggForPlayer(p) : undefined}
+                            onKeyDown={playerProfileUrl ? (event) => handleOpenOpggKeyDown(event, p) : undefined}
+                            title={playerProfileUrl ? `Abrir ${preferredPlatformLabel}: ${p.mainAccountRiotId || p.riotId}` : undefined}
+                          >
+                            <span className="pos">{p._rank}</span>
 
-                    <div className="player-rank">
-                      {p.error ? (
-                        <span className="no-rank error-text">{p.error}</span>
-                      ) : (
-                        <>
-                          <div className="player-rank-main">
-                            <div className="player-rank-badges">
-                              <div className="queue-badge-stack">
-                                <RankBadge rankData={p.soloq} queueLabel="SOLOQ" />
-                                {p.soloq && <WinRate wins={p.soloq.wins} losses={p.soloq.losses} />}
-                              </div>
-                              <div className="queue-badge-stack">
-                                <RankBadge rankData={p.flex} queueLabel="FLEX" />
-                                <span className="queue-understat">{formatQueueSummary(p.flex) || "Sin games"}</span>
+                            <div className="player-main">
+                              {p.profileIconId && (
+                                <img
+                                  className="icon"
+                                  src={`https://ddragon.leagueoflegends.com/cdn/${ddragonVersion}/img/profileicon/${p.profileIconId}.png`}
+                                  alt=""
+                                />
+                              )}
+                              <div className="player-info">
+                                {p.emote && <span className="riot-emote">{formatMoteDisplay(p.emote)}</span>}
+                                {showRiotIdRow && (
+                                  <div className="riot-id-row">
+                                    <span className="riot-id">{p.riotId}</span>
+                                    {showInGameChip && (
+                                      <button
+                                        type="button"
+                                        className="live-game-chip live-game-chip--inline"
+                                        title={inGameChipTitle}
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          openOpggUrl(liveGameUrl);
+                                        }}
+                                        onKeyDown={(event) => {
+                                          if (event.key !== "Enter" && event.key !== " ") return;
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          openOpggUrl(liveGameUrl);
+                                        }}
+                                      >
+                                        IN GAME
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                                <div className="profile-platforms" aria-label="Perfiles externos">
+                                  {getProfilePlatformLinks(p.mainAccountRiotId || p.riotId).map((platform) => (
+                                    <button
+                                      key={`${p.groupKey || p.riotId}-${platform.key}`}
+                                      type="button"
+                                      className="profile-platform-btn"
+                                      title={`Abrir ${platform.label}`}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        openOpggUrl(platform.url);
+                                      }}
+                                      onKeyDown={(event) => {
+                                        if (event.key !== "Enter" && event.key !== " ") return;
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        openOpggUrl(platform.url);
+                                      }}
+                                    >
+                                      <img src={platform.icon} alt={platform.label} />
+                                    </button>
+                                  ))}
+                                </div>
+                                {p.accountCount > 1 && <span className="riot-alts">Cuenta top: {p.mainAccountRiotId || p.riotId}</span>}
+                                {rankingMode === "all" && p.ownerRiotId && String(p.ownerRiotId).toLowerCase() !== String(p.riotId || "").toLowerCase() && (
+                                  <span className="riot-alts">Dueño: {p.ownerRiotId}</span>
+                                )}
+                                {p.altAccounts?.length > 0 && (
+                                  <span className="riot-alts">
+                                    Smurfs: {p.altAccounts.join(" · ")}
+                                    {p.altAccountsHiddenCount > 0 ? ` · +${p.altAccountsHiddenCount}` : ""}
+                                  </span>
+                                )}
+                                {p.summonerLevel && <span className="level">Nv. {p.summonerLevel}</span>}
                               </div>
                             </div>
-                          </div>
-                        </>
-                      )}
-                    </div>
 
-                    <div className="player-warns" title="Senales del jugador">
-                      {playerWarnings.length > 0 ? (
-                        playerWarnings.map((warn) => (
-                          <span key={warn} className="warn-pill" title={warn}>{warn}</span>
-                        ))
-                      ) : (
-                        <span className="warn-pill warn-pill--empty">Sin señales</span>
-                      )}
+                            <ChampIcons champions={p.topChampions} version={ddragonVersion} />
+
+                            <div className="role-cell">
+                              <RoleIcon role={p.mainRole} />
+                            </div>
+
+                            <div className="player-rank">
+                              {p.error ? (
+                                <span className="no-rank error-text">{p.error}</span>
+                              ) : (
+                                <>
+                                  <div className="player-rank-main">
+                                    <div className="player-rank-badges">
+                                      <div className="queue-badge-stack">
+                                        <RankBadge rankData={p.soloq} queueLabel="SOLOQ" />
+                                        {p.soloq && <WinRate wins={p.soloq.wins} losses={p.soloq.losses} />}
+                                      </div>
+                                      <div className="queue-badge-stack">
+                                        <RankBadge rankData={p.flex} queueLabel="FLEX" />
+                                        <span className="queue-understat">{formatQueueSummary(p.flex) || "Sin games"}</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+
+                            <div className="player-warns" title="Senales del jugador">
+                              {playerWarnings.length > 0 ? (
+                                playerWarnings.map((warn) => (
+                                  <span key={warn} className="warn-pill" title={warn}>{warn}</span>
+                                ))
+                              ) : (
+                                <span className="warn-pill warn-pill--empty">Sin señales</span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
-                  </div>
-                );
-              })}
+                  )}
+                </>
+              )}
             </div>
-          )}
+          </div>
+        </div>
+
         </>
-      )}
-    </>
-  );
+      );
 
   // Log live-games API to browser console (no direct Riot calls)
   useEffect(() => {
@@ -2081,12 +2300,27 @@ export default function App() {
   };
 
   return (
-    <AppLayout onTabChange={setActiveTab} activeTab={activeTab}>
+    <>
+      {(activeTab === "admin" || activeTab === "info") && (
+        <LetterGlitch
+          className="app-letter-glitch-bg"
+          glitchColors={["#2b4539", "#61dca3", "#61b3dc"]}
+          glitchSpeed={50}
+          centerVignette={false}
+          outerVignette
+          smooth
+        />
+      )}
+      <AppLayout onTabChange={setActiveTab} activeTab={activeTab}>
       <div className="app">
+        <div className="api-info-header">
+          📡 API: /h {apiRequestsPerHour} · dia {apiTodayRequests}
+        </div>
         <div className="container">
           {error && <div className="error">{error}</div>}
           {tabContent[activeTab]}
         </div>
+        {activeTab === "ranking" && dailyActivityPanel}
       </div>
 
       <div
@@ -2134,6 +2368,7 @@ export default function App() {
           </div>
         </aside>
       )}
-    </AppLayout>
+      </AppLayout>
+    </>
   );
 }

@@ -773,6 +773,7 @@ function buildDailyHighlights() {
   let bestSoloqGain = null;
   let bestFlexGain = null;
   let worstSoloqLoss = null;
+  let worstFlexLoss = null;
   let bestOverallGain = null;
   let worstOverallLoss = null;
 
@@ -830,6 +831,12 @@ function buildDailyHighlights() {
         currentLp: row.flexCurrentLp,
         queueScore: flexScore,
       }, true);
+      worstFlexLoss = pickStandingWinner(worstFlexLoss, {
+        player: row.riotId,
+        deltaLp: delta,
+        currentLp: row.flexCurrentLp,
+        queueScore: flexScore,
+      }, false);
     }
 
     if (hasAnyQueue && hasAnyDeltaActivity) {
@@ -855,6 +862,7 @@ function buildDailyHighlights() {
 
   // Symmetric rule: losers must represent actual losses (< 0), never neutral/positive.
   if (worstSoloqLoss && Number(worstSoloqLoss.deltaLp) >= 0) worstSoloqLoss = null;
+  if (worstFlexLoss && Number(worstFlexLoss.deltaLp) >= 0) worstFlexLoss = null;
   if (worstOverallLoss && Number(worstOverallLoss.deltaLp) >= 0) worstOverallLoss = null;
 
   return {
@@ -862,6 +870,7 @@ function buildDailyHighlights() {
     bestSoloqGain,
     bestFlexGain,
     worstSoloqLoss,
+    worstFlexLoss,
     bestOverallGain,
     worstOverallLoss,
   };
