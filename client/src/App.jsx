@@ -199,7 +199,7 @@ const PLAYER_OWNER_ALIASES = {
   "łm not perfect#euw": "Guantes",
   "xryt360#ifd": "Ryt",
   "xryt360#euw": "Ryt",
-  "everyone muted": "Guantes",
+  "everyone muted#fac": "Guantes",
 };
 
 function getPlayerOwner(player) {
@@ -212,6 +212,7 @@ function getPlayerOwner(player) {
   const normalizedId = riotId.toLowerCase();
   if (normalizedId.startsWith("heartbreaker#")) return "Azpy";
   return PLAYER_OWNER_ALIASES[normalizedId] || riotId;
+  
 }
 
 function normalizeRole(role) {
@@ -1202,7 +1203,10 @@ export default function App() {
   const rankingSourcePlayers = useMemo(() => {
     const queueScore = (player) => getQueueScore(player, rankingQueueSort);
     if (rankingMode === "combined") {
-      return groupedPlayers
+      // En combined siempre renderizamos 1 fila por owner/persona.
+      // groupedPlayers ya viene deduplicado, pero el .map() vuelve a expandir/rehidratar campos;
+      // por seguridad, deduplicamos de nuevo por groupKey.
+      const rows = groupedPlayers
         .map((grouped) => {
           const accounts = Array.isArray(grouped?.allAccounts) && grouped.allAccounts.length > 0
             ? grouped.allAccounts
@@ -1220,8 +1224,18 @@ export default function App() {
             flex: bestFlexAccount?.flex ? { ...bestFlexAccount.flex } : grouped?.flex || null,
             flexAccountRiotId: bestFlexAccount?.riotId || grouped?.flexAccountRiotId || null,
           };
-        })
-        .sort((a, b) => queueScore(b) - queueScore(a));
+        });
+
+      const deduped = new Map();
+      for (const row of rows) {
+        const k = String(row?.groupKey || row?.riotId || "").trim();
+        if (!k) continue;
+        // Si por cualquier motivo hubiera colisión, nos quedamos con el de mayor cola score.
+        const prev = deduped.get(k);
+        if (!prev || queueScore(row) > queueScore(prev)) deduped.set(k, row);
+      }
+
+      return Array.from(deduped.values()).sort((a, b) => queueScore(b) - queueScore(a));
     }
     return [...players]
       .filter((player) => Boolean(player?.riotId))
@@ -1446,13 +1460,17 @@ export default function App() {
       : formatLpDelta(highlight.deltaLp);
   };
   const tierlistPlayersByKey = useMemo(() => {
+    // IMPORTANT: la tierlist debe deduplicar por persona (owner), no por riotrid/snapshot.
+    // Si no, alias/emotes repetidos (ej: “Guantes”) pueden terminar en 2 chips.
     const map = new Map();
     for (const player of groupedPlayers) {
-      const key = String(player?.groupKey || player?.riotId || "").trim();
-      if (key) map.set(key, player);
+      const key = String(player?.groupKey || "").trim();
+      if (!key) continue;
+      map.set(key, player);
     }
     return map;
   }, [groupedPlayers]);
+
   const autoTierlist = useMemo(() => {
     const tiers = createEmptyTierlist();
     const tierForIndex = (index, total, score) => {
@@ -1464,25 +1482,29 @@ export default function App() {
       if (ratio < 0.82) return "C";
       return "D";
     };
+
     const ordered = groupedPlayers
       .filter((player) => Boolean(player?.riotId))
       .map((player) => ({ ...player, tierScore: getSoloqScore(player) }))
       .sort((a, b) => b.tierScore - a.tierScore);
 
     ordered.forEach((player, index) => {
-      const key = String(player?.groupKey || player?.riotId || "").trim();
+      const key = String(player?.groupKey || "").trim();
       if (!key) return;
       const tier = tierForIndex(index, ordered.length, player.tierScore);
       tiers[tier].push(key);
     });
+
     return tiers;
   }, [groupedPlayers]);
+
   useEffect(() => {
     setManualTierlist((prev) => {
       const validKeys = new Set(tierlistPlayersByKey.keys());
       const next = createEmptyTierlist();
       const placed = new Set();
 
+      // Re-aplicar manual sin duplicados (por key/owner)
       for (const tier of TIERLIST_TIERS) {
         for (const key of prev[tier] || []) {
           if (!validKeys.has(key) || placed.has(key)) continue;
@@ -1491,6 +1513,7 @@ export default function App() {
         }
       }
 
+      // Completar con autoTierlist, también deduplicando
       for (const tier of TIERLIST_TIERS) {
         for (const key of autoTierlist[tier] || []) {
           if (!validKeys.has(key) || placed.has(key)) continue;
