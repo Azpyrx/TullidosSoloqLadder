@@ -193,15 +193,13 @@ const PLAYER_OWNER_ALIASES = {
   "newjeans hanni#1975": "Azpy",
   "shambles#125": "Azpy",
   "heartbreaker#euw": "Azpy",
-  "heartbreaker#love": "Azpy",
   "leruno#gzzz": "leruno",
   "marlboro#fumas": "leruno",
   "slayer psycho#euw": "Guantes",
   "łm not perfect#euw": "Guantes",
   "xryt360#ifd": "Ryt",
   "xryt360#euw": "Ryt",
-  "xryt#ifd": "Ryt",
-  "xryt#euw": "Ryt",
+  "everyone muted": "Guantes",
 };
 
 function getPlayerOwner(player) {
