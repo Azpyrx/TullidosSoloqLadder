@@ -876,6 +876,47 @@ function buildDailyHighlights() {
   };
 }
 
+function buildSoloqLpHistory() {
+  const days = Object.keys(ladderCache.dailyLpByDate || {}).sort().slice(-14);
+  const seriesByPlayer = new Map();
+
+  for (const day of days) {
+    const dayMap = ladderCache.dailyLpByDate?.[day] || {};
+    for (const [dailyKey, row] of Object.entries(dayMap)) {
+      const currentLp = Number(row?.soloqCurrentLp);
+      const score = Number(row?.soloqCurrentScore);
+      if (!Number.isFinite(currentLp) || !Number.isFinite(score)) continue;
+
+      const playerName = String(row?.riotId || dailyKey || "").trim();
+      if (!playerName) continue;
+      const playerKey = String(dailyKey || playerName).toLowerCase();
+      const series = seriesByPlayer.get(playerKey) || {
+        key: playerKey,
+        player: playerName,
+        points: [],
+      };
+
+      series.player = playerName;
+      series.points.push({
+        date: day,
+        lp: currentLp,
+        score,
+        tier: row?.soloqTier || null,
+        rank: row?.soloqRank || null,
+      });
+      seriesByPlayer.set(playerKey, series);
+    }
+  }
+
+  return Array.from(seriesByPlayer.values())
+    .filter((series) => series.points.length > 0)
+    .sort((a, b) => {
+      const aLast = a.points[a.points.length - 1]?.score ?? -1;
+      const bLast = b.points[b.points.length - 1]?.score ?? -1;
+      return bLast - aLast;
+    });
+}
+
 function getDisplayNameFromRiotId(riotId) {
   const safe = String(riotId || "").trim();
   if (!safe) return "Jugador";
@@ -2401,6 +2442,7 @@ app.get("/api/status", (req, res) => {
     playersCached: Object.keys(ladderCache.playerSnapshotByKey).length,
     rawDataCached: Object.keys(ladderCache.rawDataByPuuid).length,
     dailyHighlights: buildDailyHighlights(),
+    soloqLpHistory: buildSoloqLpHistory(),
     isRefreshing: Boolean(ladderCache.refreshPromise),
     lastUpdatedAt: ladderCache.lastUpdatedAt,
     lastError: ladderCache.lastError,

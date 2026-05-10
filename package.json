@@ -9,5 +9,9 @@
     "postinstall": "npm --prefix server install && npm --prefix client install",
     "build": "npm --prefix client run build",
     "start": "npm --prefix server run start"
+  },
+  "dependencies": {
+    "highcharts": "^12.6.0",
+    "highcharts-react-official": "^3.2.3"
   }
 }

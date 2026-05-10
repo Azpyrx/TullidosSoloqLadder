@@ -3,6 +3,8 @@ import "./index.css";
 import AppLayout from "./components/AppLayout.jsx";
 import LetterGlitch from "./components/LetterGlitch.jsx";
 import Masonry from "react-masonry-css";
+import HighchartsReact from "highcharts-react-official";
+import Highcharts from "highcharts";
 import AdminPanel from "./components/AdminPanel.jsx";
 import PrivacyPage from "./components/PrivacyPage.jsx";
 
@@ -170,9 +172,6 @@ const ROLE_ICONS = {
 };
 
 const TIER_ORDER = [
-  "IRON",
-  "BRONZE",
-  "SILVER",
   "GOLD",
   "PLATINUM",
   "EMERALD",
@@ -183,6 +182,62 @@ const TIER_ORDER = [
 ];
 
 const DIVISION_INDEX = { IV: 0, III: 1, II: 2, I: 3 };
+const DIVISION_LABELS = ["IV", "III", "II", "I"];
+const TIER_SHORT_LABELS = {
+  IRON: "I",
+  BRONZE: "B",
+  SILVER: "S",
+  GOLD: "G",
+  PLATINUM: "P",
+  EMERALD: "E",
+  DIAMOND: "D",
+  MASTER: "M",
+  GRANDMASTER: "GM",
+  CHALLENGER: "C",
+};
+const LP_CHART_COLORS = [
+  "#00e59b",
+  "#7dd3fc",
+  "#facc15",
+  "#fb7185",
+  "#c084fc",
+  "#38bdf8",
+  "#f97316",
+  "#a3e635",
+  "#f472b6",
+  "#2dd4bf",
+  "#e879f9",
+  "#fde68a",
+  "#93c5fd",
+  "#34d399",
+  "#fda4af",
+  "#c4b5fd",
+];
+
+
+
+function formatScoreTick(value) {
+    const safe = Number(value);
+    if (!Number.isFinite(safe) || safe < 0) return "";
+
+    // Mostrar label solo en el primer valor de cada tier (cada 400 puntos)
+    // GOLD IV = 1200, PLATINA IV = 1600, etc.
+
+    if (safe < 2800) {
+      // Solo mostrar label si es el inicio del tier (múltiplo de 400 desde 1200)
+      if (safe < 1200 || (safe - 1200) % 400 !== 0) return "";
+      const adjustedScore = safe - 1200;
+      const tierIdx = Math.min(4, Math.floor(adjustedScore / 400));
+      const tier = TIER_ORDER[tierIdx] || "DIAMOND";
+      return TIER_LABELS[tier] || tier;
+    }
+
+    // Master/GM/Challenger
+    if (safe === 2800) return "Maestro";
+    if (safe === 3300) return "Gran Maestro";
+    if (safe === 3800) return "Aspirante";
+    return "";
+  }
 
 const PLAYER_OWNER_ALIASES = {
   "hachitas#norge": "Hachitas",
@@ -632,7 +687,7 @@ function buildActivityWarnings(player) {
     .slice(0, 4);
 }
 
-function getTierClass(tier) {
+function _getTierClass(tier) {
   if (!tier) return "unranked";
   return tier.toLowerCase();
 }
@@ -798,6 +853,332 @@ function ActivityTicker({ groupedPlayers }) {
     </div>
   );
 }
+
+function SoloqLpChart({
+  history,
+  onLegendClick,
+  illuminatedKeys,
+  showLegend = false,
+}) {
+  void illuminatedKeys;
+
+  // =========================
+  // 1) PREPARAR DATOS
+  // =========================
+  const { series } = useMemo(() => {
+    const source = Array.isArray(history) ? history : [];
+
+    const nextSeries = source
+      .map((item, index) => {
+        return {
+          key: item?.key || `player-${index}`,
+          player: item?.player || "Jugador",
+          color: LP_CHART_COLORS[index % LP_CHART_COLORS.length],
+          points: Array.isArray(item?.points) ? item.points : [],
+        };
+      })
+      .filter((item) => {
+        return item.points.length > 0;
+      })
+      .sort((a, b) => {
+        // Ordenar por LP actual (último punto) - peor rankeado primero
+        const aLastLp = Number(a.points[a.points.length - 1]?.score) || 0;
+        const bLastLp = Number(b.points[b.points.length - 1]?.score) || 0;
+        return aLastLp - bLastLp;
+      });
+
+    return { series: nextSeries };
+  }, [history]);
+
+  // =========================
+  // 2) CONVERTIR A FORMATO HIGHCHARTS
+  // =========================
+  const chartSeries = useMemo(() => {
+    const illuminatedSet = new Set(
+      Array.isArray(illuminatedKeys)
+        ? illuminatedKeys.map((k) => String(k).toLowerCase())
+        : typeof illuminatedKeys === "string"
+        ? [illuminatedKeys.toLowerCase()]
+        : []
+    );
+    return (series || []).map((item) => {
+      const data = item.points
+        .map((point) => {
+          return {
+            x: new Date(point.date).getTime(),
+            y: Number(point.score),
+            meta: point,
+          };
+        })
+        .sort((a, b) => a.x - b.x);
+
+      const isIlluminated = illuminatedSet.has(String(item.key).toLowerCase());
+      const shouldDim = illuminatedSet.size > 0 && !isIlluminated;
+
+      return {
+        name: item.player,
+        data,
+        color: item.color,
+        type: "area",
+        opacity: shouldDim ? 0.2 : 1,
+      };
+    });
+  }, [series, illuminatedKeys]);
+
+  const yAxisMin = useMemo(() => {
+    // GOLD IV empieza en score 1200 (del servidor)
+    return 1200;
+  }, []);
+
+  const yAxisMax = useMemo(() => {
+    const scores = (series || []).flatMap((s) => s.points?.map((p) => Number(p.score)) || []);
+    const maxScore = Math.max(...scores, 0);
+    if (maxScore <= 2400) return 2400;
+    if (maxScore <= 3100) return 3100;
+    if (maxScore <= 3600) return 3600;
+    return maxScore + 200;
+  }, [series]);
+
+  // =========================
+  // 3) OPCIONES DEL CHART (HIGHCHARTS)
+  // =========================
+  const options = useMemo(() => {
+    return {
+      chart: {
+        type: "line",
+        backgroundColor: "transparent",
+        spacingTop: 15,
+        spacingRight: 15,
+        spacingLeft: 15,
+        zoomType: "x",
+        panning: true,
+        panKey: "shift",
+      },
+
+      title: {
+        text: null,
+      },
+
+      legend: {
+        enabled: false,
+      },
+
+      credits: {
+        enabled: false,
+      },
+
+      xAxis: {
+        type: "datetime",
+        labels: {
+          style: {
+            color: "#91a8c4",
+            fontSize: "11px",
+          },
+        },
+        gridLineColor: "rgba(255, 255, 255, 0.05)",
+      },
+
+      yAxis: {
+        min: yAxisMin,
+        max: yAxisMax,
+        minPadding: 0,
+        startOnTick: false,
+        endOnTick: true,
+        title: {
+          text: null,
+        },
+        tickPositioner: function () {
+          const allPositions = [1600, 2000, 2400, 2800, 3600, 4100];
+          const positions = allPositions.filter((pos) => pos <= yAxisMax);
+          return positions;
+        },
+        labels: {
+          formatter: function () {
+            const safe = this.value;
+            const tierMap = {
+              1600: "Platino",
+              2000: "Esmeralda",
+              2400: "Diamante",
+              2800: "Maestro",
+              3600: "Gran Maestro",
+              4100: "Aspirante",
+            };
+            return tierMap[safe] || "";
+          },
+          style: {
+            color: "#91a8c4",
+          },
+        },
+        gridLineColor: "rgba(255, 255, 255, 0.05)",
+      },
+
+      
+
+      plotOptions: {
+        area: {
+          stacking: undefined,
+          lineColor: undefined,
+          lineWidth: 1,
+          marker: {
+            enabled: true,
+            radius: 5,
+            states: {
+              hover: {
+                radius: 2.5,
+              },
+            },
+          },
+          fillOpacity: 0.15,
+        },
+        series: {
+          states: {
+            hover: {
+              enabled: false,
+            },
+            inactive: {
+              opacity: 0.3,
+            },
+          },
+        },
+      },
+
+      
+
+      tooltip: {
+        shared: true,
+        crosshairs: true,
+        backgroundColor: "rgba(253, 253, 253, 0.94)",
+        borderColor: "rgba(255, 255, 255, 0.18)",
+        borderRadius: 10,
+        useHTML: true,
+        formatter: function () {
+          const date = new Date(this.x).toLocaleDateString("es-ES", {
+            day: "2-digit",
+            month: "short",
+            year: "numeric",
+          });
+
+          const rows = this.points
+            .sort((a, b) => Number(b.y) - Number(a.y))
+            .map((point) => {
+              const meta = point.point?.meta || {};
+              const lp = meta.lp ?? point.y;
+              const tierText = meta.tier
+                ? `${meta.tier || ""} ${meta.rank || ""} · ${lp} LP`
+                : `${lp} LP`;
+
+              return `
+                <div class="lp-chart-tooltip__row">
+                  <span
+                    class="lp-chart-tooltip__dot"
+                    style="background:${point.color}"
+                  ></span>
+                  <strong>${point.series.name}</strong>
+                  <span>${tierText}</span>
+                </div>
+              `;
+            })
+            .join("");
+
+          return `
+            <div class="lp-chart-tooltip">
+              <span class="lp-chart-tooltip__date">${date}</span>
+              ${rows}
+            </div>
+          `;
+        },
+        headerFormat: "",
+        pointFormat: "",
+      },
+    };
+  }, []);
+
+  // =========================
+  // 4) ESTADO VACÍO
+  // =========================
+  if (!series || series.length === 0) {
+    return (
+      <div className="lp-chart-section">
+        <div className="activity-section__header">
+          <h3 className="activity-title">GRAFICA DE LPS</h3>
+        </div>
+
+        <div className="lp-chart-empty">
+          Sin historial de SoloQ todavía.
+        </div>
+      </div>
+    );
+  }
+
+  // =========================
+// 5) RENDER NORMAL
+   // =========================
+   const illuminatedSet = new Set(
+     Array.isArray(illuminatedKeys)
+       ? illuminatedKeys.map((k) => String(k).toLowerCase())
+       : typeof illuminatedKeys === "string"
+       ? [illuminatedKeys.toLowerCase()]
+       : []
+   );
+
+   return (
+    <div className="lp-chart-section">
+      <div className="activity-section__header">
+        <h3 className="activity-title">GRAFICA DE LPS</h3>
+      </div>
+
+      <div className="lp-chart-frame">
+        <HighchartsReact
+          highcharts={Highcharts}
+          options={{
+            ...options,
+            series: chartSeries,
+          }}
+        />
+      </div>
+
+      {showLegend && (
+        <div
+          className="lp-chart-legend"
+          aria-label="Leyenda de colores"
+        >
+          {series.map((item) => {
+            return (
+              <span
+                className="lp-chart-legend__item"
+                key={item.key}
+                title={item.player}
+                onClick={() => {
+                  if (onLegendClick) {
+                    onLegendClick(item.key);
+                  }
+                }}
+                style={{
+                  cursor: onLegendClick ? "pointer" : "default",
+                  opacity: illuminatedSet.has(String(item.key).toLowerCase()) ? 1 : illuminatedSet.size > 0 ? 0.4 : 1,
+                }}
+              >
+                <span
+                  className="lp-chart-legend__swatch"
+                  style={{
+                    background: item.color,
+                    boxShadow: `0 0 10px ${item.color}`,
+                  }}
+                />
+                {item.player}
+              </span>
+            );
+          })}
+        </div>
+      )}
+    </div>
+
+    
+  );
+  
+};
+
+
 
 export default function App() {
   const [activeTab, setActiveTab] = useState(() => tabFromPathname(window.location.pathname));
@@ -1132,6 +1513,7 @@ export default function App() {
           r: s.riotRateLimited,
           u: s.lastUpdatedAt,
           d: s.dailyHighlights,
+          l: s.soloqLpHistory,
         });
 
         if (statusSignatureRef.current !== signature) {
@@ -1153,6 +1535,13 @@ export default function App() {
   }, [activeTab]);
 
   const ddragonVersion = cacheMeta.ddragonVersion || "14.24.1";
+
+  function getDailyPlayerKeyClient(player) {
+    if (player?.puuid) return `puuid:${player.puuid}`;
+    if (player?.riotId) return `riot:${String(player.riotId).toLowerCase()}`;
+    return null;
+  }
+ 
 
   const groupedPlayers = useMemo(() => {
     const groups = new Map();
@@ -1199,6 +1588,32 @@ export default function App() {
       };
     });
   }, [players]);
+
+  const [illuminatedKeys, setIlluminatedKeys] = useState(() => new Set());
+
+  const combinedSoloqChartKeys = useMemo(() => {
+    const keys = [];
+    for (const grouped of groupedPlayers || []) {
+      const accounts = Array.isArray(grouped?.allAccounts) && grouped.allAccounts.length > 0
+        ? grouped.allAccounts
+        : [grouped];
+      const bestSoloqAccount = [...accounts].sort((a, b) => getSoloqScore(b) - getSoloqScore(a))[0] || null;
+      const key = getDailyPlayerKeyClient(bestSoloqAccount);
+      if (key) keys.push(String(key).toLowerCase());
+    }
+    return keys;
+  }, [groupedPlayers]);
+
+  useEffect(() => {
+    setIlluminatedKeys(new Set(combinedSoloqChartKeys.slice(0, 5)));
+  }, [combinedSoloqChartKeys]);
+
+  const soloqHistoryForChart = useMemo(() => {
+    const source = Array.isArray(apiStatus?.soloqLpHistory) ? apiStatus.soloqLpHistory : [];
+    if (combinedSoloqChartKeys.length === 0) return [];
+    const keyed = new Set(combinedSoloqChartKeys);
+    return source.filter((s) => keyed.has(String(s?.key || "").toLowerCase()));
+  }, [apiStatus?.soloqLpHistory, combinedSoloqChartKeys]);
 
   const rankingSourcePlayers = useMemo(() => {
     const queueScore = (player) => getQueueScore(player, rankingQueueSort);
@@ -1269,7 +1684,7 @@ export default function App() {
       return matchesSearch && matchesRole;
     });
 
-  const rankedPlayers = rankingSourcePlayers.filter((player) => !player.error);
+  const _rankedPlayers = rankingSourcePlayers.filter((player) => !player.error);
   const latestActivityEntry = useMemo(() => {
     if (!Array.isArray(activityFeed) || activityFeed.length === 0) return null;
     return [...activityFeed].sort((a, b) => {
@@ -1279,7 +1694,7 @@ export default function App() {
     })[0] || null;
   }, [activityFeed]);
 
-  const groupedPlayersByOwner = useMemo(() => {
+  const _groupedPlayersByOwner = useMemo(() => {
     const map = new Map();
     for (const player of groupedPlayers) {
       if (!player?.riotId) continue;
@@ -1313,7 +1728,7 @@ export default function App() {
     openOpggUrl(buildOpggMatchUrlFromEntry(entry));
   }, [openOpggUrl]);
 
-  const handleShowSampleRankingPopup = useCallback(() => {
+  const _handleShowSampleRankingPopup = useCallback(() => {
     if (!latestActivityEntry) return;
     const previewEntry = {
       ...latestActivityEntry,
@@ -1675,6 +2090,7 @@ export default function App() {
           </div>
         </div>
       </div>
+      
       <div className="tierlist-section">
         <div className="activity-section__header tierlist-section__header">
           <h3 className="activity-title">TIERLIST DEL GRUPO</h3>
@@ -2063,6 +2479,21 @@ export default function App() {
           </div>
         </div>
 
+        {/* Gráfico de LP debajo del ranking - ancho completo */}
+<SoloqLpChart
+           history={soloqHistoryForChart}
+           illuminatedKeys={illuminatedKeys}
+           showLegend={true}
+           onLegendClick={(key) => {
+             const k = String(key || "").toLowerCase();
+             setIlluminatedKeys((prev) => {
+               const prevString = String(prev || "");
+               if (prevString === k) return new Set();
+               return new Set([k]);
+             });
+           }}
+         />
+
         </>
       );
 
@@ -2341,7 +2772,12 @@ export default function App() {
           {error && <div className="error">{error}</div>}
           {tabContent[activeTab]}
         </div>
-        {activeTab === "ranking" && dailyActivityPanel}
+
+        {activeTab === "ranking" && (
+          <>
+            {dailyActivityPanel}
+          </>
+        )}
       </div>
 
       <div
@@ -2365,7 +2801,9 @@ export default function App() {
             </button>
           ))}
         </div>
-      </div>
+
+        
+        </div>
 
       {consentChoice === "pending" && (
         <aside className="consent-banner" role="dialog" aria-live="polite" aria-label="Consentimiento de analitica">
